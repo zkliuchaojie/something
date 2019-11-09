@@ -1,0 +1,1 @@
+This is a durable transaction memory library.
