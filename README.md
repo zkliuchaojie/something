@@ -1,1 +1,1 @@
-This is a durable transaction memory library.
+This is a Persistent Transactional Memory library.
