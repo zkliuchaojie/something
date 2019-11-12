@@ -5,7 +5,9 @@
 #include "sth.h"
 #endif
 
-typedef unsigned long long Value_t;
+#ifndef INTSET_H_
+#include "intset.h"
+#endif
 
 /*
  * PO means Ptm Object.
@@ -28,7 +30,7 @@ public:
     }
 };
 
-class LinkedList {
+class LinkedList : public AbstractIntset {
 public:
     // sentinel 哨兵
     PtmObjectWrapper *sentinel_;
@@ -47,6 +49,7 @@ public:
     void Insert(Value_t val);
     // if val exists and is deleted successfully, return ture
     bool Delete(Value_t val);
+    unsigned long long Size();
 };
 
 bool LinkedList::Search(Value_t val) {
@@ -70,37 +73,35 @@ bool LinkedList::Search(Value_t val) {
 
 void LinkedList::Insert(Value_t val) {
     PTM_START;
-    
+    //std::cout <<"insert: " << val << std::endl;
+    PtmObjectWrapper *prev = sentinel_;
     PONode *po_node = (PONode *)sentinel_->Open(READ);
-    // skip the sentinel
-    PtmObjectWrapper *po_node_wrapper = po_node->next_;
-    PtmObjectWrapper *prev, *curr;
-    prev = curr = po_node_wrapper;
+    PtmObjectWrapper *curr = po_node->next_;
+
     po_node = (PONode *)curr->Open(READ);
-    while(curr != sentinel_ && val < po_node->val_) {
+    while(curr != sentinel_ && val > po_node->val_) {
         prev = curr;
         curr = po_node->next_;
         po_node = (PONode *)curr->Open(READ);
     }
     curr->Open(WRITE);
     po_node = (PONode *)prev->Open(WRITE);
-    po_node->next_ = new PtmObjectWrapper(new PONode(val, curr));
-
+    PONode *new_po_node = new PONode(val, curr);
+    po_node->next_ = new PtmObjectWrapper(new_po_node);
+    //std::cout << "insert finished" << std::endl;
     PTM_COMMIT;
 }
 
 bool LinkedList::Delete(Value_t val) {
     PTM_START;
-
-    bool retval = true;
     PONode *tmp;
+    bool retval = true;
+    PtmObjectWrapper *prev = sentinel_;
     PONode *po_node = (PONode *)sentinel_->Open(READ);
-    // skip the sentinel
-    PtmObjectWrapper *po_node_wrapper = po_node->next_;
-    PtmObjectWrapper *prev, *curr;
-    prev = curr = po_node_wrapper;
+    PtmObjectWrapper *curr = po_node->next_;
+
     po_node = (PONode *)curr->Open(READ);
-    while(curr != sentinel_ && val < po_node->val_) {
+    while(curr != sentinel_ && val > po_node->val_) {
         prev = curr;
         curr = po_node->next_;
         po_node = (PONode *)curr->Open(READ);
@@ -114,6 +115,19 @@ bool LinkedList::Delete(Value_t val) {
         retval = true;
     }else {
         retval = false;
+    }
+    PTM_COMMIT;
+    return retval;
+}
+
+unsigned long long LinkedList::Size() {
+    PTM_START;
+    unsigned long long retval = 0;
+    // skip the sentinel
+    PtmObjectWrapper *po_node_wrapper = ((PONode *)sentinel_->Open(READ))->next_;
+    while(po_node_wrapper != sentinel_) {
+        retval++;
+        po_node_wrapper = ((PONode *)po_node_wrapper->Open(READ))->next_;
     }
     PTM_COMMIT;
     return retval;

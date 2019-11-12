@@ -7,14 +7,16 @@
 #include <sys/sysinfo.h>
 #include <sys/time.h>
 #include <fstream>
-#include<time.h>
+#include <time.h>
+#include <unistd.h>
 
-#define NR_OPERATIONS   16000
-#define INPUT_FILE      "data"       // using input_gen.cpp to generate data file
+#define NR_OPERATIONS   10000
+#define INPUT_FILE      "data"      // using input_gen.cpp to generate data file
 
-#define NR_THREADS      4        // must be equal or less nr_cpus
+#define NR_THREADS      1           // must be equal or less nr_cpus
 #define NR_RECOVERY_THREADS     1   //the default value
 
+bool stop = 0;
 double *times;
 
 double mysecond() {
@@ -25,14 +27,14 @@ double mysecond() {
 }
 
 void insert(LinkedList *ll, Value_t *values, int cur_nr_threads) {
-    for(int i=0; i<NR_OPERATIONS/cur_nr_threads; i++) {
+    for(int i=0; !stop && i<NR_OPERATIONS/cur_nr_threads; i++) {
         ll->Insert(values[i]);
     }
 }
 
 void search(LinkedList *ll, Value_t *values, int cur_nr_threads) {
     bool tmp_value;
-    for(int i=0; i<NR_OPERATIONS/cur_nr_threads; i++) {
+    for(int i=0; !stop && i<NR_OPERATIONS/cur_nr_threads; i++) {
         tmp_value = ll->Search(values[i]);
         if(__glibc_unlikely(tmp_value != true)){
             std::cout << "search failed, value: " << values[i] << std::endl;
@@ -42,7 +44,7 @@ void search(LinkedList *ll, Value_t *values, int cur_nr_threads) {
 
 void _delete(LinkedList *ll, Value_t *values, int cur_nr_threads) {
     bool is_delete_success;
-    for(int i=0; i<NR_OPERATIONS/cur_nr_threads; i++) {
+    for(int i=0; !stop && i<NR_OPERATIONS/cur_nr_threads; i++) {
         is_delete_success = ll->Delete(values[i]);
         if(__glibc_unlikely(is_delete_success == false)){
             std::cout << "delele failed, key: " << (unsigned long)values[i] << std::endl;
@@ -50,27 +52,13 @@ void _delete(LinkedList *ll, Value_t *values, int cur_nr_threads) {
     }
 }
 
-void print_result(int thread_num) {
+void print_result(int thread_num, AbstractIntset *intset) {
     double total_time = times[1] - times[0];
     std::cout << "thread num: " << thread_num+1;
     std::cout <<", total time: " << total_time << \
-    ", OPS: " << NR_OPERATIONS*1.0/(total_time) << std::endl;
+    ", OPS: " << NR_OPERATIONS*1.0/(total_time) << \
+    ", size: " << intset->Size() << std::endl;
 }
-
-#ifdef TEST_RECOVERY
-void print_recovery_result(int nr_threads) {
-    double total_time = times[1] - times[0];
-    std::cout << "thread num: " << nr_threads;
-#ifdef INPLACE
-    std::cout<< ", mode: INPLACE";
-#else
-    std::cout << "mode: COW";
-#endif
-    std::cout <<", total time: " << total_time << \
-    ", leaf node count: " << recovery_leaf_node_cnt_ << \
-    ", clflush count: " << recovery_clflush_cnt_ << std::endl;
-}
-#endif
 
 void clear_cache() {
     const size_t size = 1024*1024*512;
@@ -112,7 +100,7 @@ int main() {
         for(int i=0; i<=thread_idx; i++)
             threads[i]->join();
         times[1] = mysecond();
-        print_result(thread_idx);
+        print_result(thread_idx, ll);
         delete ll;
     }
     // test get
@@ -133,7 +121,7 @@ int main() {
         for(int i=0; i<=thread_idx; i++)
             threads[i]->join();
         times[1] = mysecond();
-        print_result(thread_idx);
+        print_result(thread_idx, ll);
         delete ll;
     }
     // test _delete
@@ -154,7 +142,7 @@ int main() {
         for(int i=0; i<=thread_idx; i++)
             threads[i]->join();
         times[1] = mysecond();
-        print_result(thread_idx);
+        print_result(thread_idx, ll);
         delete ll;
     }
     return 0;

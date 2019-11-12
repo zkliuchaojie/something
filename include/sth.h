@@ -133,6 +133,7 @@ private:
     std::vector<ObjectWithVersionNum> olders;
 
     AbstractPtmObject *OpenWithRead(Transaction *tx) {
+        // we do not need to check if this object already exists in r_set_.
         if(version_num_ < tx->end_) {
             tx->start_ = std::max(tx->start_, version_num_);
             tx->end_ = std::min(tx->end_, ATOMIC_LOAD(&global_timestamp));
@@ -147,6 +148,11 @@ private:
     AbstractPtmObject *OpenWithWrite(Transaction *tx) {
         if(tx->is_readonly_ == true)
             tx->is_readonly_ = false;
+        // check if we already put this object into write set
+        for(int i=0; i<tx->w_set_.size(); i++) {
+            if(tx->w_set_[i].ptm_object_wrapper_ == this)
+                return new_;
+        }
         if(version_num_ < tx->end_) {
             tx->start_ = std::max(tx->start_, version_num_);
             tx->end_ = std::min(tx->end_, ATOMIC_LOAD(&global_timestamp));
@@ -241,8 +247,8 @@ static bool ValidataInPOW(PtmObjectWrapper *pow, unsigned long long version_num)
 
 static void CommitWriteInPOW(PtmObjectWrapper *pow, unsigned long long commit_timestamp) {
     pow->version_num_ = commit_timestamp;
+    delete pow->old_;
     pow->old_ = pow->new_;
-    delete pow->new_;
     pow->new_ = nullptr;
 }
 
