@@ -9,6 +9,14 @@
 #include "sth_atomic.h"
 #endif
 
+#ifndef MM_POOL_H_
+#include "mm_pool.h"
+#endif
+
+#ifndef MM_ABSTRACT_OBJECT_H_
+#include "mm_abstract_object.h"
+#endif
+
 #include <vector>
 #include <iostream>
 #include <setjmp.h>
@@ -80,11 +88,13 @@ public:
 /*
  * All ptm objects should inherit this abstract class.
  */
-class AbstractPtmObject {
+class AbstractPtmObject : public MMAbstractObject {
 public:
     // refers: https://www.cnblogs.com/albizzia/p/8979078.html
     virtual ~AbstractPtmObject() {};
     virtual AbstractPtmObject *Clone() = 0;
+public:
+    AbstractPool<AbstractPtmObject> *po_pool_;
 };
 
 class PtmObjectWrapper {

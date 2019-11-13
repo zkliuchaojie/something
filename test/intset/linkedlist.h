@@ -5,6 +5,14 @@
 #include "sth.h"
 #endif
 
+#ifndef MM_PARTITION_H_
+#include "mm_partition.h"
+#endif
+
+#ifndef MM_POOL_H_
+#include "mm_pool.h"
+#endif
+
 #ifndef INTSET_H_
 #include "intset.h"
 #endif
@@ -23,7 +31,7 @@ public:
     PONode(Value_t val, PtmObjectWrapper *next) : val_(val), next_(next) {};
     ~PONode() {};
     AbstractPtmObject *Clone() {
-        PONode *po_node = new PONode();
+        PONode *po_node = po_pool_->Alloc();
         po_node->val_ = val_;
         po_node->next_ = next_;
         return po_node;
@@ -36,14 +44,20 @@ public:
     PtmObjectWrapper *sentinel_;
 
 public:
+    Pool<PONode> *po_node_pool_;
+
+public:
     LinkedList() {
+        po_node_pool_ = new Pool<PONode>();
         PTM_START;
-        PONode *po_node = new PONode(0);
+        PONode *po_node = po_node_pool_->Alloc();
         sentinel_ = new PtmObjectWrapper(po_node);
         po_node->next_ = sentinel_;
         PTM_COMMIT;
     };
-    ~LinkedList() {};
+    ~LinkedList() {
+        delete po_node_pool_;
+    }
     // if val exists, return true, or false
     bool Search(Value_t val);
     void Insert(Value_t val);
@@ -86,9 +100,11 @@ void LinkedList::Insert(Value_t val) {
     }
     curr->Open(WRITE);
     po_node = (PONode *)prev->Open(WRITE);
-    PONode *new_po_node = new PONode(val, curr);
+    PONode *new_po_node = po_node_pool_->Alloc();
+    new_po_node->val_ = val;
+    new_po_node->next_ = curr;
     po_node->next_ = new PtmObjectWrapper(new_po_node);
-    //std::cout << "insert finished" << std::endl;
+    std::cout << "insert finished" << std::endl;
     PTM_COMMIT;
 }
 

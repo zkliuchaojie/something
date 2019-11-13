@@ -6,7 +6,7 @@ CC= g++
 LD = g++
 
 LIBS = -lm -lpthread -lrt -latomic
-CFLAGS = -g -Wall -Wno-unused -Wno-return-type -Wno-sign-compare -std=c++17 -I. -O3
+CFLAGS = -g -Wall -Wno-unused -Wno-return-type -Wno-sign-compare -std=c++17 -I.
 CFLAGS += -I../../include
 OBJDIR = ../obj
 
