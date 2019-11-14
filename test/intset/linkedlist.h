@@ -87,7 +87,7 @@ public:
 bool LinkedList::Search(Value_t val) {
     PTM_START;
     bool retval = false;
-    PONode * po_node = (PONode *)sentinel_->Open(READ);
+    PONode *po_node = (PONode *)sentinel_->Open(READ);
     // skip the sentinel
     PtmObjectWrapper<PONode> *po_node_wrapper = po_node->next_;
     while(po_node_wrapper != sentinel_) {

@@ -17,6 +17,10 @@
 #include "mm_abstract_object.h"
 #endif
 
+#ifndef STH_CONST_H_
+#include "sth_const.h"
+#endif
+
 #include <vector>
 #include <iostream>
 #include <setjmp.h>
@@ -41,7 +45,7 @@
 }while(0);
 
 #define INF ((unsigned long long)(-1L))
-unsigned long long global_timestamp = 0;
+volatile unsigned long long global_timestamp = 0;
 
 enum TransactionStatus {
     ACTIVE = 0,
@@ -55,34 +59,98 @@ enum OpenMode {
     WRITE,
     INIT,
 };
-class AbstractPtmObjectWrapper;
+
 template <typename T>
 class PtmObjectWrapper;
 class Transaction;
 static Transaction *GetThreadTransaction();
 static void sth_ptm_abort(Transaction *tx);
 
+class AbstractPtmObjectWrapper {
+public:
+    virtual void DeleteNew() = 0;
+    virtual bool Validate(unsigned long long version_num) = 0;
+    virtual void CommitWrite(unsigned long long commit_timestamp) = 0;
+    virtual void Unlock() = 0;
+    virtual ~AbstractPtmObjectWrapper() {};
+
+};
 
 struct PtmObjectWrapperWithVersionNum {
     AbstractPtmObjectWrapper *ptm_object_wrapper_;
     unsigned long long version_num_;
 };
 
-class Transaction {
+class RwSet {
 public:
-    sigjmp_buf env_;
+    PtmObjectWrapperWithVersionNum *set_;
+    unsigned long long entries_num_;
+    unsigned long long capacity_;
+    RwSet() {
+        entries_num_ = 0;
+        capacity_ = kRwSetDefaultSize;
+        set_ = (PtmObjectWrapperWithVersionNum *)malloc( \
+            sizeof(PtmObjectWrapperWithVersionNum) * capacity_);
+    }
+    ~RwSet() {
+        delete set_;
+    }
+    void Clear() {
+        entries_num_ = 0;
+    }
+    void Push(AbstractPtmObjectWrapper *ptm_object_wrapper, unsigned long long version_num) {
+        // TODO: realloc
+        set_[entries_num_].ptm_object_wrapper_ = ptm_object_wrapper;
+        set_[entries_num_].version_num_ = version_num;
+        entries_num_++;
+    }
+    bool DoesContain(AbstractPtmObjectWrapper *ptm_object_wrapper) {
+        for(int i=0; i<entries_num_; i++) {
+            if(set_[i].ptm_object_wrapper_ == ptm_object_wrapper)
+                return true;
+        }
+        return false;
+    }
+    bool Validate() {
+        for (int i=0; i<entries_num_; i++) {
+            if (set_[i].ptm_object_wrapper_->Validate(set_[i].version_num_) == false)
+                return false;
+        }
+        return true;
+    }
+    void CommitWrites(unsigned long long commit_timestamp) {
+        for (int i=0; i<entries_num_; i++) {
+            set_[i].ptm_object_wrapper_->CommitWrite(commit_timestamp);    
+        }
+    }
+    void Unlock() {
+        for (int i=0; i<entries_num_; i++) {
+            set_[i].ptm_object_wrapper_->Unlock(); 
+        }
+    }
+    void DeleteNew() {
+        for (int i=0; i<entries_num_; i++) {
+            set_[i].ptm_object_wrapper_->DeleteNew();   
+        }
+    }
+
+};
+
+class alignas(kCacheLineSize) Transaction {
+public:
     int status_;
     unsigned long long start_;
     unsigned long long end_;
     bool is_readonly_;
-    std::vector<PtmObjectWrapperWithVersionNum> r_set_;
-    std::vector<PtmObjectWrapperWithVersionNum> w_set_; 
+    RwSet *r_set_;
+    RwSet *w_set_;
+    sigjmp_buf env_; 
 
     Transaction() {
         status_ = UNDETERMINED;
         is_readonly_ = true;
-        r_set_.reserve(256);
-        r_set_.reserve(256);
+        r_set_ = new RwSet();
+        w_set_ = new RwSet();
     }
 };
 
@@ -99,21 +167,11 @@ public:
     virtual void Delete() = 0;
 };
 
-class AbstractPtmObjectWrapper {
-public:
-    virtual void DeleteNew() = 0;
-    virtual bool Validate(unsigned long long version_num) = 0;
-    virtual void CommitWrite(unsigned long long commit_timestamp) = 0;
-    virtual void Unlock() = 0;
-    virtual ~AbstractPtmObjectWrapper() {};
-
-};
-
 /*
  * ptm object wrapper
  */
 template <typename T>
-class PtmObjectWrapper : public AbstractPtmObjectWrapper {
+class alignas(kCacheLineSize) PtmObjectWrapper : public AbstractPtmObjectWrapper {
 public:
     struct ObjectWithVersionNum {
         void *object_;
@@ -183,11 +241,12 @@ private:
     AbstractPtmObject *OpenWithRead(Transaction *tx) {
         //std::cout << "OpenWithRead" << std::endl;
         // we do not need to check if this object already exists in r_set_.
-        if(version_num_ < tx->end_) {
+        if(version_num_ <= tx->end_) {
             tx->start_ = std::max(tx->start_, version_num_);
-            //tx->end_ = std::min(tx->end_, ATOMIC_LOAD(&global_timestamp));
+            // the global_timestamp don't need to be very precise.
+            tx->end_ = tx->end_ > global_timestamp ? global_timestamp : tx->end_;
             // there exists an concurrent bug
-            tx->r_set_.push_back(PtmObjectWrapperWithVersionNum{this, version_num_});
+            tx->r_set_->Push(this, version_num_);
             return &old_;
         }else {
             sth_ptm_abort(tx);
@@ -205,16 +264,15 @@ private:
         if(tx->is_readonly_ == true)
             tx->is_readonly_ = false;
         // check if we already put this object into write set
-        for(int i=0; i<tx->w_set_.size(); i++) {
-            if(tx->w_set_[i].ptm_object_wrapper_ == this)
-                return new_;
-        }
-        if(version_num_ < tx->end_) {
+        if (tx->w_set_->DoesContain(this) == true)
+            return new_;
+        if(version_num_ <= tx->end_) {
             tx->start_ = std::max(tx->start_, version_num_);
-            tx->end_ = std::min(tx->end_, ATOMIC_LOAD(&global_timestamp));
+            tx->end_ = tx->end_ > global_timestamp ? global_timestamp : tx->end_;
+            //std::cout << "before try lock" << std::endl;
             if(mutex_.try_lock() == true) {
                 // there exists an concurrent bug
-                tx->w_set_.push_back(PtmObjectWrapperWithVersionNum{this, version_num_});
+                tx->w_set_->Push(this, version_num_);
                 new_ = old_.Clone();
                 return new_;
             }else {
@@ -233,36 +291,31 @@ static jmp_buf *sth_ptm_start() {
     tx->start_ = ATOMIC_LOAD(&global_timestamp);
     tx->end_ = INF;
     tx->is_readonly_ = true;
-    tx->r_set_.clear();
-    tx->w_set_.clear();
+    tx->r_set_->Clear();
+    tx->w_set_->Clear();
+    //std::cout << "start ptm" << std::endl;
     return &tx->env_;
 }
 
 static void sth_ptm_validate(Transaction *tx) {
-    PtmObjectWrapperWithVersionNum *pow_v;
-    for(int i=0; i<tx->r_set_.size(); i++) {
-        pow_v = &tx->r_set_[i]; 
-        if(pow_v->ptm_object_wrapper_->Validate(pow_v->version_num_) == false)
-            sth_ptm_abort(tx);
-    }
+    if (tx->r_set_->Validate() == false)
+        sth_ptm_abort(tx);
 }
 
 static void sth_ptm_commit() {
     Transaction *tx;
     tx = GetThreadTransaction();
-    if(tx->status_ != ACTIVE)
+    if (tx->status_ != ACTIVE)
         pr_info_and_exit("there is no active transactions");
-    sth_ptm_validate(tx);
-    unsigned long long commit_timestamp;
-    commit_timestamp = ATOMIC_FETCH_ADD(&global_timestamp, 1);
-    // commit writes
-    for(int i=0; i<tx->w_set_.size(); i++) {
-        tx->w_set_[i].ptm_object_wrapper_->CommitWrite(commit_timestamp);
+    if (tx->is_readonly_ == false) {
+        sth_ptm_validate(tx);
+        unsigned long long commit_timestamp;
+        commit_timestamp = ATOMIC_FETCH_ADD(&global_timestamp, 1);
+        // commit writes
+        tx->w_set_->CommitWrites(commit_timestamp);
+        tx->w_set_->Unlock();
+        tx->status_ = COMMITTED;
     }
-    for(int i=0; i<tx->w_set_.size(); i++) {
-        tx->w_set_[i].ptm_object_wrapper_->Unlock();
-    }
-    tx->status_ = COMMITTED;
 }
 
 static void sth_ptm_abort(Transaction *tx) {
@@ -270,10 +323,10 @@ static void sth_ptm_abort(Transaction *tx) {
     tx->start_ = ATOMIC_LOAD(&global_timestamp);
     tx->end_ = INF;
     tx->is_readonly_ = true;
-    tx->r_set_.clear();
-    for(int i=0; i<tx->w_set_.size(); i++)
-        tx->w_set_[i].ptm_object_wrapper_->DeleteNew();
-    tx->w_set_.clear();
+    tx->w_set_->DeleteNew();
+    tx->w_set_->Unlock();
+    tx->r_set_->Clear();
+    tx->w_set_->Clear();
     siglongjmp(tx->env_, 1);
 }
 

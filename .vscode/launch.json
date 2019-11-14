@@ -8,7 +8,7 @@
             "name": "(gdb) Launch",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/test/intset/ll-test",
+            "program": "${workspaceFolder}/test/intset/intset-ll",
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/test/intset",
