@@ -17,7 +17,7 @@ public:
 };
 
 class GarbageList {
-public: 
+public:
     EpochManager* epoch_manager_;
     GarbageList() = delete;
     GarbageList(EpochManager *epoch_manager);
@@ -68,6 +68,7 @@ void GarbageList::Push(void* removed_object, DestroyCallback destroy_callback) {
             if(!epoch_manager_->IsSafeToReclaim(garbage_entry->removed_epoch_)) {
                 continue;
             }
+            std::cout << "aaa" << std::endl;
             garbage_entry->destroy_callback_(garbage_entry->removed_object_);
         }
         garbage_entry->removed_epoch_ = current_epoch;

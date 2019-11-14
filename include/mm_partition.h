@@ -5,10 +5,14 @@
 #include "mm_garbage_list.h"
 #endif
 
+#ifndef MM_ABSTRACT_OBJECT_H_
+#include "mm_abstract_object.h"
+#endif
+
 // the current implementation do not consider reclaim descriptor partitions.
 class Partition {
 public:
-    void *free_list_; // pointing to a MMAbstractObject
+    MMAbstractObject *free_list_; // pointing to a MMAbstractObject
     unsigned long int allocated_num_;
     GarbageList *garbage_list_;
     unsigned long int num_per_partition_;

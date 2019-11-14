@@ -17,22 +17,22 @@
 #include "sth.h"
 #endif
 
-template <typename T>
-class AbstractPool {
-public:
-    AbstractPool() {} = 0;
-    virtual ~AbstractPool() {};
-    virtual T *Alloc() = 0;
-    virtual void Free(T * object) = 0;
-    virtual void Protect() = 0;
-    virtual void Unprotect() = 0;
-};
+// template <typename T>
+// class AbstractPool {
+// public:
+//     AbstractPool() {} = 0;
+//     virtual ~AbstractPool() {};
+//     virtual T *Alloc() = 0;
+//     virtual void Free(T * object) = 0;
+//     virtual void Protect() = 0;
+//     virtual void Unprotect() = 0;
+// };
 
 /*
  * PO means ptm object.
  */
 template <typename T>
-class Pool : public AbstractPool<T>{
+class Pool {
 public:
     Pool() {
         partitions_ = (Partition *)malloc(sizeof(Partition) * kPartitionNum);

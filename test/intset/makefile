@@ -6,11 +6,11 @@ CC= g++
 LD = g++
 
 LIBS = -lm -lpthread -lrt -latomic
-CFLAGS = -g -Wall -Wno-unused -Wno-return-type -Wno-sign-compare -std=c++17 -I.
+CFLAGS = -g -Wall -Wno-unused -Wno-return-type -Wno-sign-compare -std=c++17 -I. -O3
 CFLAGS += -I../../include
 OBJDIR = ../obj
 
-JUNK = *~ $(OBJDIR)/*.o $(OBJDIR)/*.a $(OBJDIR)/*_ut  *-test
+JUNK = *~ $(OBJDIR)/*.o $(OBJDIR)/*.a $(OBJDIR)/*_ut  *-test *-*
 
 # tests
 run-all-test: ll-test
@@ -28,4 +28,4 @@ $(OBJDIR)/linkedlist_test.o: linkedlist_test.cc
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:
-	rm -f  test $(JUNK)
+	rm -f  test $(JUNK) 

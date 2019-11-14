@@ -23,12 +23,14 @@
 class PONode : public AbstractPtmObject {
 public:
     Value_t val_;
-    PtmObjectWrapper *next_;
+    PtmObjectWrapper<PONode> *next_;
+public:
+    Pool<PONode> *po_pool_;
 
 public:
     PONode() : val_(0), next_(nullptr) {};
     PONode(Value_t val) : val_(val), next_(nullptr) {};
-    PONode(Value_t val, PtmObjectWrapper *next) : val_(val), next_(next) {};
+    PONode(Value_t val, PtmObjectWrapper<PONode> *next) : val_(val), next_(next) {};
     ~PONode() {};
     AbstractPtmObject *Clone() {
         PONode *po_node = po_pool_->Alloc();
@@ -36,12 +38,27 @@ public:
         po_node->next_ = next_;
         return po_node;
     }
+    void Copy(AbstractPtmObject *ptm_object) {
+        PONode *po_node = (PONode *)ptm_object;
+        val_ = po_node->val_;
+        next_ = po_node->next_;
+    }
+    void Delete() {
+        po_pool_->Free(this);
+    }
+    static void Free(void *object) {
+        MMAbstractObject *object_to_free = (MMAbstractObject *)object;
+        object_to_free->__next_=object_to_free->__owner_partition_->free_list_;
+        object_to_free->__owner_partition_->free_list_ = object_to_free;
+        object_to_free->__owner_partition_->allocated_num_--;
+    }
 };
+
 
 class LinkedList : public AbstractIntset {
 public:
     // sentinel 哨兵
-    PtmObjectWrapper *sentinel_;
+    PtmObjectWrapper<PONode> *sentinel_;
 
 public:
     Pool<PONode> *po_node_pool_;
@@ -50,9 +67,10 @@ public:
     LinkedList() {
         po_node_pool_ = new Pool<PONode>();
         PTM_START;
-        PONode *po_node = po_node_pool_->Alloc();
-        sentinel_ = new PtmObjectWrapper(po_node);
+        sentinel_ = new PtmObjectWrapper<PONode>();
+        PONode *po_node = (PONode *)sentinel_->Open(INIT);
         po_node->next_ = sentinel_;
+        po_node->po_pool_ = po_node_pool_;
         PTM_COMMIT;
     };
     ~LinkedList() {
@@ -71,7 +89,7 @@ bool LinkedList::Search(Value_t val) {
     bool retval = false;
     PONode * po_node = (PONode *)sentinel_->Open(READ);
     // skip the sentinel
-    PtmObjectWrapper *po_node_wrapper = po_node->next_;
+    PtmObjectWrapper<PONode> *po_node_wrapper = po_node->next_;
     while(po_node_wrapper != sentinel_) {
         po_node = (PONode *)po_node_wrapper->Open(READ);
         if(po_node->val_ == val) {
@@ -88,9 +106,9 @@ bool LinkedList::Search(Value_t val) {
 void LinkedList::Insert(Value_t val) {
     PTM_START;
     //std::cout <<"insert: " << val << std::endl;
-    PtmObjectWrapper *prev = sentinel_;
+    PtmObjectWrapper<PONode> *prev = sentinel_;
     PONode *po_node = (PONode *)sentinel_->Open(READ);
-    PtmObjectWrapper *curr = po_node->next_;
+    PtmObjectWrapper<PONode> *curr = po_node->next_;
 
     po_node = (PONode *)curr->Open(READ);
     while(curr != sentinel_ && val > po_node->val_) {
@@ -100,11 +118,13 @@ void LinkedList::Insert(Value_t val) {
     }
     curr->Open(WRITE);
     po_node = (PONode *)prev->Open(WRITE);
-    PONode *new_po_node = po_node_pool_->Alloc();
+    PtmObjectWrapper<PONode> *new_po_node_wrapper = new PtmObjectWrapper<PONode>();
+    PONode *new_po_node = (PONode *)new_po_node_wrapper->Open(INIT);
     new_po_node->val_ = val;
     new_po_node->next_ = curr;
-    po_node->next_ = new PtmObjectWrapper(new_po_node);
-    std::cout << "insert finished" << std::endl;
+    new_po_node->po_pool_ = po_node_pool_;
+    po_node->next_ = new_po_node_wrapper;
+    //std::cout << "insert finished" << std::endl;
     PTM_COMMIT;
 }
 
@@ -112,9 +132,9 @@ bool LinkedList::Delete(Value_t val) {
     PTM_START;
     PONode *tmp;
     bool retval = true;
-    PtmObjectWrapper *prev = sentinel_;
+    PtmObjectWrapper<PONode> *prev = sentinel_;
     PONode *po_node = (PONode *)sentinel_->Open(READ);
-    PtmObjectWrapper *curr = po_node->next_;
+    PtmObjectWrapper<PONode> *curr = po_node->next_;
 
     po_node = (PONode *)curr->Open(READ);
     while(curr != sentinel_ && val > po_node->val_) {
@@ -140,7 +160,7 @@ unsigned long long LinkedList::Size() {
     PTM_START;
     unsigned long long retval = 0;
     // skip the sentinel
-    PtmObjectWrapper *po_node_wrapper = ((PONode *)sentinel_->Open(READ))->next_;
+    PtmObjectWrapper<PONode> *po_node_wrapper = ((PONode *)sentinel_->Open(READ))->next_;
     while(po_node_wrapper != sentinel_) {
         retval++;
         po_node_wrapper = ((PONode *)po_node_wrapper->Open(READ))->next_;

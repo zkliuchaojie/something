@@ -1,15 +1,12 @@
 #ifndef MM_ABSTRACT_OBJECT_H_
 #define MM_ABSTRACT_OBJECT_H_
 
-#ifndef MM_PARTITION_H_
-#include "mm_partition.h"
-#endif
+class Partition;
 
 /*
  * All object that want to use mm, 
  * should inherite this abstract object.
  */
-
 class MMAbstractObject {
 public:
     Partition *__owner_partition_;
