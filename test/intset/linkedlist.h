@@ -17,6 +17,8 @@
 #include "intset.h"
 #endif
 
+#define USE_MM
+
 /*
  * PO means Ptm Object.
  */
@@ -33,7 +35,11 @@ public:
     PONode(Value_t val, PtmObjectWrapper<PONode> *next) : val_(val), next_(next) {};
     ~PONode() {};
     AbstractPtmObject *Clone() {
+#ifdef USE_MM
         PONode *po_node = po_pool_->Alloc();
+#else
+        PONode *po_node = new PONode();
+#endif
         po_node->val_ = val_;
         po_node->next_ = next_;
         return po_node;
@@ -44,7 +50,11 @@ public:
         next_ = po_node->next_;
     }
     void Delete() {
+#ifdef USE_MM
         po_pool_->Free(this);
+#else
+        ;
+#endif
     }
     static void Free(void *object) {
         MMAbstractObject *object_to_free = (MMAbstractObject *)object;
