@@ -9,7 +9,7 @@
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/test/intset/intset-ll",
-            "args": [],
+            "args": ["-n 4"],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/test/intset",
             "environment": [],

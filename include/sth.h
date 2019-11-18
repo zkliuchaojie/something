@@ -60,11 +60,15 @@ enum OpenMode {
     INIT,
 };
 
+
 template <typename T>
 class PtmObjectWrapper;
 class Transaction;
 static Transaction *GetThreadTransaction();
 static void sth_ptm_abort(Transaction *tx);
+
+Pool<Transaction>           *tx_pool = nullptr;
+thread_local Transaction    *tx = nullptr;
 
 class AbstractPtmObjectWrapper {
 public:
@@ -136,15 +140,15 @@ public:
 
 };
 
-class alignas(kCacheLineSize) Transaction {
+class alignas(kCacheLineSize) Transaction : public MMAbstractObject {
 public:
-    int status_;
+    volatile TransactionStatus status_;
     unsigned long long start_;
     unsigned long long end_;
     bool is_readonly_;
     RwSet *r_set_;
     RwSet *w_set_;
-    sigjmp_buf env_; 
+    sigjmp_buf env_;
 
     Transaction() {
         status_ = UNDETERMINED;
@@ -221,6 +225,10 @@ public:
     }
     void CommitWrite(unsigned long long commit_timestamp) {
         version_num_ = commit_timestamp;
+        /*
+         * Since the copy func is not atomic, readers may read partial new data.
+         * Therefore, readers must check the POW's transaction status.
+         */
         old_.Copy(new_);
         new_->Delete();
         new_ = nullptr;
@@ -240,8 +248,10 @@ private:
 
     AbstractPtmObject *OpenWithRead(Transaction *tx) {
         //std::cout << "OpenWithRead" << std::endl;
+        if (tx->status_ != COMMITTED)
+            sth_ptm_abort(tx_);
         // we do not need to check if this object already exists in r_set_.
-        if(version_num_ <= tx->end_) {
+        if (version_num_ <= tx->end_) {
             tx->start_ = std::max(tx->start_, version_num_);
             // the global_timestamp don't need to be very precise.
             tx->end_ = tx->end_ > global_timestamp ? global_timestamp : tx->end_;
@@ -261,6 +271,8 @@ private:
 
     AbstractPtmObject *OpenWithWrite(Transaction *tx) {
         //std::cout << "OpenWithWrite" << std::endl;
+        if (tx->status_ != COMMITTED)
+            sth_ptm_abort(tx_);
         if(tx->is_readonly_ == true)
             tx->is_readonly_ = false;
         // check if we already put this object into write set
@@ -331,10 +343,13 @@ static void sth_ptm_abort(Transaction *tx) {
 }
 
 static Transaction *GetThreadTransaction() {
-    thread_local Transaction *tx = nullptr;
     if(tx == nullptr)
         tx = new Transaction();
     return tx;
+}
+
+static void PutThreadTransaction() {
+    
 }
 
 #endif

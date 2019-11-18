@@ -8,7 +8,7 @@ typedef void (*DestroyCallback)(void *object);
 const int kGarbageListCount = 128 * 1024;
 const int kPoolSize = 64 * 1024;
 // each thread occupies one partition
-const int kPartitionNum = 1;
+const int kPartitionNum = 4;
 // each thread occupies one epoch entry
 const int kEpochTableSize = 128;
 
