@@ -50,7 +50,7 @@ public:
                 index = i*num_per_partition + j;
                 new (&array_[index]) T();
                 array_[index].__owner_partition_ = partition;
-                array_[index].po_pool_ = this;
+                array_[index].__mm_pool_ = this;
                 array_[index].__next_= (T *)partition->free_list_;
                 partition->free_list_ = &array_[index];
             }
@@ -92,7 +92,7 @@ public:
         return retval;
     }
     void Free(T * object) {
-        object->__owner_partition_->garbage_list_->Push(object, T::Free);
+        object->__owner_partition_->garbage_list_->Push(object, T::Destroy);
     }
     void Protect() {
         epoch_manager_.Protect();

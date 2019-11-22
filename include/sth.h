@@ -60,24 +60,19 @@ enum OpenMode {
     INIT,
 };
 
-
 template <typename T>
 class PtmObjectWrapper;
 class Transaction;
 static Transaction *GetThreadTransaction();
 static void sth_ptm_abort(Transaction *tx);
 
-Pool<Transaction>           *tx_pool = nullptr;
-thread_local Transaction    *tx = nullptr;
-
 class AbstractPtmObjectWrapper {
 public:
-    virtual void DeleteNew() = 0;
+    virtual void FreeNew() = 0;
     virtual bool Validate(unsigned long long version_num) = 0;
-    virtual void CommitWrite(unsigned long long commit_timestamp) = 0;
+    virtual void CommitWrite(unsigned long long commit_timestamp, Transaction *tx) = 0;
     virtual void Unlock() = 0;
     virtual ~AbstractPtmObjectWrapper() {};
-
 };
 
 struct PtmObjectWrapperWithVersionNum {
@@ -98,6 +93,9 @@ public:
     }
     ~RwSet() {
         delete set_;
+    }
+    unsigned long long GetEntriesNum() {
+        return entries_num_;
     }
     void Clear() {
         entries_num_ = 0;
@@ -122,9 +120,9 @@ public:
         }
         return true;
     }
-    void CommitWrites(unsigned long long commit_timestamp) {
+    void CommitWrites(unsigned long long commit_timestamp, Transaction *tx) {
         for (int i=0; i<entries_num_; i++) {
-            set_[i].ptm_object_wrapper_->CommitWrite(commit_timestamp);    
+            set_[i].ptm_object_wrapper_->CommitWrite(commit_timestamp, tx);    
         }
     }
     void Unlock() {
@@ -132,9 +130,9 @@ public:
             set_[i].ptm_object_wrapper_->Unlock(); 
         }
     }
-    void DeleteNew() {
+    void FreeNew() {
         for (int i=0; i<entries_num_; i++) {
-            set_[i].ptm_object_wrapper_->DeleteNew();   
+            set_[i].ptm_object_wrapper_->FreeNew();   
         }
     }
 
@@ -149,12 +147,37 @@ public:
     RwSet *r_set_;
     RwSet *w_set_;
     sigjmp_buf env_;
+public:
+    /* 
+     * recording how many objects refers this tx, if is 0, 
+     * then we can free this tx.
+     */
+    int reference_count_;   
 
+public:
     Transaction() {
         status_ = UNDETERMINED;
         is_readonly_ = true;
         r_set_ = new RwSet();
         w_set_ = new RwSet();
+        reference_count_ = 0;
+    }
+ 
+    ~Transaction() {
+        delete r_set_;
+        delete w_set_;
+    }
+    
+    void SetRC(int rc) {
+        reference_count_ = rc;
+    }
+
+    void DecRC() {
+        reference_count_--;
+    }
+
+    bool IsSafeToFree() {
+        return reference_count_ == 0;
     }
 };
 
@@ -168,7 +191,7 @@ public:
     virtual AbstractPtmObject *Clone() = 0;
     // copy ptm_object to this
     virtual void Copy(AbstractPtmObject *ptm_object) = 0;
-    virtual void Delete() = 0;
+    virtual void Free() = 0;
 };
 
 /*
@@ -178,8 +201,9 @@ template <typename T>
 class alignas(kCacheLineSize) PtmObjectWrapper : public AbstractPtmObjectWrapper {
 public:
     struct ObjectWithVersionNum {
-        void *object_;
         unsigned long long version_num_;    // version_num_ can be a timestamp.
+        void *object_;
+        Transaction *belonging_tx_;
     };
 
 public:
@@ -189,10 +213,10 @@ public:
         tx = GetThreadTransaction();
         if(tx->status_ !=  ACTIVE)
             pr_info_and_exit("there is no active transactions");
-        tx_ = tx;
+        curr_tx_ = nullptr;     // init with nullptr
+        curr_version_num_ = 0;  // version num starts from 0
+        new (&curr_) T();
         new_ = nullptr;
-        new (&old_) T();
-        version_num_ = 0;
         olders.clear();
     }
 
@@ -214,23 +238,24 @@ public:
             return OpenWithInit();
     }
 
-    void DeleteNew() {
-        new_->Delete();
+    void FreeNew() {
+        new_->Free();
         new_ = nullptr;
     }
     bool Validate(unsigned long long version_num) {
-        if (version_num_ != version_num)
+        if (curr_version_num_ != version_num)
             return false;
         return true;
     }
-    void CommitWrite(unsigned long long commit_timestamp) {
-        version_num_ = commit_timestamp;
+    void CommitWrite(unsigned long long commit_timestamp, Transaction *tx) {
+        curr_version_num_ = commit_timestamp;
         /*
          * Since the copy func is not atomic, readers may read partial new data.
          * Therefore, readers must check the POW's transaction status.
          */
-        old_.Copy(new_);
-        new_->Delete();
+        curr_tx_ = tx;
+        curr_.Copy(new_);
+        new_->Free();
         new_ = nullptr;
     }
     void Unlock() {
@@ -238,9 +263,9 @@ public:
     }
 
 private:
-    Transaction *tx_;
-    unsigned long long version_num_;    // version_num_ can be a timestamp.
-    T old_;
+    Transaction *curr_tx_;
+    unsigned long long curr_version_num_;    // version_num_ can be a timestamp.
+    T curr_;
     AbstractPtmObject *new_;
     std::mutex mutex_;
     // for now, this is not used, we just implement one-version.
@@ -248,16 +273,17 @@ private:
 
     AbstractPtmObject *OpenWithRead(Transaction *tx) {
         //std::cout << "OpenWithRead" << std::endl;
-        if (tx->status_ != COMMITTED)
-            sth_ptm_abort(tx_);
+        if (curr_tx_ != nullptr && curr_tx_->status_ != COMMITTED)
+            sth_ptm_abort(tx);
         // we do not need to check if this object already exists in r_set_.
-        if (version_num_ <= tx->end_) {
-            tx->start_ = std::max(tx->start_, version_num_);
+        if (curr_version_num_ <= tx->end_) {
+            tx->start_ = std::max(tx->start_, curr_version_num_);
             // the global_timestamp don't need to be very precise.
-            tx->end_ = tx->end_ > global_timestamp ? global_timestamp : tx->end_;
+            tx->end_ = tx->end_ > global_timestamp ? \
+                global_timestamp : tx->end_;
             // there exists an concurrent bug
-            tx->r_set_->Push(this, version_num_);
-            return &old_;
+            tx->r_set_->Push(this, curr_version_num_);
+            return &curr_;
         }else {
             sth_ptm_abort(tx);
         }
@@ -266,26 +292,27 @@ private:
      * OpenWithInit is used to init a new PtmObjectWrapper.
      */
     AbstractPtmObject *OpenWithInit() {
-        return &old_;
+        return &curr_;
     }
 
     AbstractPtmObject *OpenWithWrite(Transaction *tx) {
         //std::cout << "OpenWithWrite" << std::endl;
-        if (tx->status_ != COMMITTED)
-            sth_ptm_abort(tx_);
+        if (curr_tx_!=nullptr && curr_tx_->status_ != COMMITTED)
+            sth_ptm_abort(tx);
         if(tx->is_readonly_ == true)
             tx->is_readonly_ = false;
         // check if we already put this object into write set
         if (tx->w_set_->DoesContain(this) == true)
             return new_;
-        if(version_num_ <= tx->end_) {
-            tx->start_ = std::max(tx->start_, version_num_);
-            tx->end_ = tx->end_ > global_timestamp ? global_timestamp : tx->end_;
+        if(curr_version_num_ <= tx->end_) {
+            tx->start_ = std::max(tx->start_, curr_version_num_);
+            tx->end_ = tx->end_ > global_timestamp ? \
+                global_timestamp : tx->end_;
             //std::cout << "before try lock" << std::endl;
             if(mutex_.try_lock() == true) {
                 // there exists an concurrent bug
-                tx->w_set_->Push(this, version_num_);
-                new_ = old_.Clone();
+                tx->w_set_->Push(this, curr_version_num_);
+                new_ = curr_.Clone();
                 return new_;
             }else {
                 sth_ptm_abort(tx);
@@ -324,10 +351,11 @@ static void sth_ptm_commit() {
         unsigned long long commit_timestamp;
         commit_timestamp = ATOMIC_FETCH_ADD(&global_timestamp, 1);
         // commit writes
-        tx->w_set_->CommitWrites(commit_timestamp);
+        tx->w_set_->CommitWrites(commit_timestamp, tx);
         tx->w_set_->Unlock();
-        tx->status_ = COMMITTED;
     }
+    tx->status_ = COMMITTED;
+    tx->SetRC(tx->w_set_->GetEntriesNum());
 }
 
 static void sth_ptm_abort(Transaction *tx) {
@@ -335,7 +363,7 @@ static void sth_ptm_abort(Transaction *tx) {
     tx->start_ = ATOMIC_LOAD(&global_timestamp);
     tx->end_ = INF;
     tx->is_readonly_ = true;
-    tx->w_set_->DeleteNew();
+    tx->w_set_->FreeNew();
     tx->w_set_->Unlock();
     tx->r_set_->Clear();
     tx->w_set_->Clear();
@@ -343,13 +371,10 @@ static void sth_ptm_abort(Transaction *tx) {
 }
 
 static Transaction *GetThreadTransaction() {
-    if(tx == nullptr)
-        tx = new Transaction();
-    return tx;
-}
-
-static void PutThreadTransaction() {
-    
+    thread_local Transaction *thread_tx = nullptr;
+    if (thread_tx == nullptr ||  thread_tx->status_ == COMMITTED)
+        thread_tx = new Transaction();
+    return thread_tx;
 }
 
 #endif

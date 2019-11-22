@@ -26,8 +26,6 @@ class PONode : public AbstractPtmObject {
 public:
     Value_t val_;
     PtmObjectWrapper<PONode> *next_;
-public:
-    Pool<PONode> *po_pool_;
 
 public:
     PONode() : val_(0), next_(nullptr) {};
@@ -36,7 +34,7 @@ public:
     ~PONode() {};
     AbstractPtmObject *Clone() {
 #ifdef USE_MM
-        PONode *po_node = po_pool_->Alloc();
+        PONode *po_node = ((Pool<PONode> *)__mm_pool_)->Alloc();
 #else
         PONode *po_node = new PONode();
 #endif
@@ -49,14 +47,14 @@ public:
         val_ = po_node->val_;
         next_ = po_node->next_;
     }
-    void Delete() {
+    void Free() {
 #ifdef USE_MM
-        po_pool_->Free(this);
+        ((Pool<PONode> *)__mm_pool_)->Free(this);
 #else
         ;
 #endif
     }
-    static void Free(void *object) {
+    static void Destroy(void *object) {
         MMAbstractObject *object_to_free = (MMAbstractObject *)object;
         object_to_free->__next_=object_to_free->__owner_partition_->free_list_;
         object_to_free->__owner_partition_->free_list_ = object_to_free;
@@ -80,7 +78,7 @@ public:
         sentinel_ = new PtmObjectWrapper<PONode>();
         PONode *po_node = (PONode *)sentinel_->Open(INIT);
         po_node->next_ = sentinel_;
-        po_node->po_pool_ = po_node_pool_;
+        po_node->__mm_pool_ = po_node_pool_;
         PTM_COMMIT;
     };
     ~LinkedList() {
@@ -132,9 +130,8 @@ void LinkedList::Insert(Value_t val) {
     PONode *new_po_node = (PONode *)new_po_node_wrapper->Open(INIT);
     new_po_node->val_ = val;
     new_po_node->next_ = curr;
-    new_po_node->po_pool_ = po_node_pool_;
+    new_po_node->__mm_pool_ = po_node_pool_;
     po_node->next_ = new_po_node_wrapper;
-    //std::cout << "insert finished" << std::endl;
     PTM_COMMIT;
 }
 
