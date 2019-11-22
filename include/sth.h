@@ -248,12 +248,13 @@ public:
         return true;
     }
     void CommitWrite(unsigned long long commit_timestamp, Transaction *tx) {
+        curr_tx_ = tx;
+        //mfence // we need a mfence
         curr_version_num_ = commit_timestamp;
         /*
          * Since the copy func is not atomic, readers may read partial new data.
          * Therefore, readers must check the POW's transaction status.
          */
-        curr_tx_ = tx;
         curr_.Copy(new_);
         new_->Free();
         new_ = nullptr;
@@ -354,8 +355,9 @@ static void sth_ptm_commit() {
         tx->w_set_->CommitWrites(commit_timestamp, tx);
         tx->w_set_->Unlock();
     }
-    tx->status_ = COMMITTED;
     tx->SetRC(tx->w_set_->GetEntriesNum());
+    //mfence(); // we need a mfence here
+    tx->status_ = COMMITTED;
 }
 
 static void sth_ptm_abort(Transaction *tx) {
