@@ -32,12 +32,17 @@ public:
     PONode(Value_t val) : val_(val), next_(nullptr) {};
     PONode(Value_t val, PtmObjectWrapper<PONode> *next) : val_(val), next_(next) {};
     ~PONode() {};
-    AbstractPtmObject *Clone() {
+    AbstractPtmObject *Clone(bool is_use_mm = true) {
+        PONode *po_node;
+        if (is_use_mm == true) {
 #ifdef USE_MM
-        PONode *po_node = ((Pool<PONode> *)__mm_pool_)->Alloc();
+        po_node = ((Pool<PONode> *)__mm_pool_)->Alloc();
 #else
-        PONode *po_node = new PONode();
+        po_node = new PONode();
 #endif
+        } else {
+            po_node = new PONode();
+        }
         po_node->val_ = val_;
         po_node->next_ = next_;
         return po_node;
