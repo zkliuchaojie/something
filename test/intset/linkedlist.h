@@ -38,10 +38,12 @@ public:
 #ifdef USE_MM
         po_node = ((Pool<PONode> *)__mm_pool_)->Alloc();
 #else
-        po_node = new PONode();
+        po_node = (PONode *)malloc(sizeof(PONode));
+        new (po_node) PONode();
 #endif
         } else {
-            po_node = new PONode();
+            po_node = (PONode *)malloc(sizeof(PONode));
+            new (po_node) PONode();
         }
         po_node->val_ = val_;
         po_node->next_ = next_;

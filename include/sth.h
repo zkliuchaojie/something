@@ -25,6 +25,7 @@
 #include <iostream>
 #include <setjmp.h>
 #include <mutex>
+#include <cstring>
 
 #define pr_info_and_exit(str) do { \
     std::cout << str << ", FILE: " << __FILE__ << \
@@ -188,10 +189,46 @@ class AbstractPtmObject : public MMAbstractObject {
 public:
     // refers: https://www.cnblogs.com/albizzia/p/8979078.html
     virtual ~AbstractPtmObject() {};
-    virtual AbstractPtmObject *Clone() = 0;
+    virtual AbstractPtmObject *Clone(bool is_use_mm) = 0;
     // copy ptm_object to this
     virtual void Copy(AbstractPtmObject *ptm_object) = 0;
     virtual void Free() = 0;
+};
+
+struct OldObject {
+    unsigned long long version_num_;    // version_num_ can be a timestamp.
+    void *object_;
+    Transaction *belonging_tx_;
+};
+
+/*
+ * the class name is ugly
+ */
+class Olders {
+public:
+    Olders(int size = kOldVersionsDefaultSize) : kSize_(size), pos_(0) {
+        old_objects_ = (OldObject*)malloc(sizeof(OldObject)*kSize_);
+        memset(old_objects_, 0, sizeof(OldObject)*kSize_);
+        if (old_objects_ == nullptr)
+            pr_info_and_exit("failed to alloc memory space for old versions");
+    }
+    ~Olders() {
+        if (old_objects_ != nullptr)
+            free(old_objects_);
+    }
+    void Insert(unsigned long long version_num, void *object, \
+        Transaction *belonging_tx_) {
+        if (old_objects_[pos_].object_ != nullptr)
+             free(old_objects_[pos_].object_);
+        old_objects_[pos_].version_num_ = version_num;
+        old_objects_[pos_].object_ = object;
+        old_objects_[pos_].belonging_tx_ = belonging_tx_;
+        pos_ = (pos_ + 1) % kSize_;
+    }
+private:
+    const int kSize_;
+    int pos_;   // pointing to a position that we can insert
+    OldObject *old_objects_;
 };
 
 /*
@@ -199,13 +236,6 @@ public:
  */
 template <typename T>
 class alignas(kCacheLineSize) PtmObjectWrapper : public AbstractPtmObjectWrapper {
-public:
-    struct ObjectWithVersionNum {
-        unsigned long long version_num_;    // version_num_ can be a timestamp.
-        void *object_;
-        Transaction *belonging_tx_;
-    };
-
 public:
     PtmObjectWrapper() {
         // I am not clear when generating a new PtmObject
@@ -217,7 +247,6 @@ public:
         curr_version_num_ = 0;  // version num starts from 0
         new (&curr_) T();
         new_ = nullptr;
-        olders.clear();
     }
 
     AbstractPtmObject *Open(OpenMode mode) {
@@ -248,6 +277,9 @@ public:
         return true;
     }
     void CommitWrite(unsigned long long commit_timestamp, Transaction *tx) {
+        // put current version into olders first
+        olders_.Insert(curr_version_num_, curr_.Clone(false), curr_tx_);
+        // set current version info
         curr_tx_ = tx;
         //mfence // we need a mfence
         curr_version_num_ = commit_timestamp;
@@ -270,7 +302,7 @@ private:
     AbstractPtmObject *new_;
     std::mutex mutex_;
     // for now, this is not used, we just implement one-version.
-    std::vector<ObjectWithVersionNum> olders;
+    Olders olders_;
 
     AbstractPtmObject *OpenWithRead(Transaction *tx) {
         //std::cout << "OpenWithRead" << std::endl;
@@ -295,7 +327,10 @@ private:
     AbstractPtmObject *OpenWithInit() {
         return &curr_;
     }
-
+    /*
+     * The return value won't be seen by other threads, so we
+     * do not need to use Pretect/Unprotect in mm_pool.
+     */
     AbstractPtmObject *OpenWithWrite(Transaction *tx) {
         //std::cout << "OpenWithWrite" << std::endl;
         if (curr_tx_!=nullptr && curr_tx_->status_ != COMMITTED)
@@ -342,6 +377,9 @@ static void sth_ptm_validate(Transaction *tx) {
         sth_ptm_abort(tx);
 }
 
+/*
+ * do not consider durability yet.
+ */
 static void sth_ptm_commit() {
     Transaction *tx;
     tx = GetThreadTransaction();
