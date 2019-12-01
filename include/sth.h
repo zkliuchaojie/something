@@ -45,9 +45,6 @@
     sth_ptm_commit(); \
 }while(0);
 
-#define INF ((unsigned long long)(-1L))
-volatile unsigned long long global_timestamp = 0;
-
 enum TransactionStatus {
     ACTIVE = 0,
     COMMITTED, 
@@ -66,6 +63,11 @@ class PtmObjectWrapper;
 class Transaction;
 static Transaction *GetThreadTransaction();
 static void sth_ptm_abort(Transaction *tx);
+
+#define INF ((unsigned long long)(-1L))
+volatile unsigned long long global_counter = 0;
+thread_local unsigned int thread_counter = 0;
+thread_local Transaction *thread_tx = nullptr;
 
 class AbstractPtmObjectWrapper {
 public:
@@ -308,18 +310,10 @@ private:
         //std::cout << "OpenWithRead" << std::endl;
         if (curr_tx_ != nullptr && curr_tx_->status_ != COMMITTED)
             sth_ptm_abort(tx);
-        // we do not need to check if this object already exists in r_set_.
-        if (curr_version_num_ <= tx->end_) {
-            tx->start_ = std::max(tx->start_, curr_version_num_);
-            // the global_timestamp don't need to be very precise.
-            tx->end_ = tx->end_ > global_timestamp ? \
-                global_timestamp : tx->end_;
-            // there exists an concurrent bug
-            tx->r_set_->Push(this, curr_version_num_);
+        if (tx->r_set_->DoesContain(this) == true)
             return &curr_;
-        }else {
-            sth_ptm_abort(tx);
-        }
+        tx->r_set_->Push(this, curr_version_num_);
+        return &curr_;
     }
     /*
      * OpenWithInit is used to init a new PtmObjectWrapper.
@@ -340,19 +334,12 @@ private:
         // check if we already put this object into write set
         if (tx->w_set_->DoesContain(this) == true)
             return new_;
-        if(curr_version_num_ <= tx->end_) {
-            tx->start_ = std::max(tx->start_, curr_version_num_);
-            tx->end_ = tx->end_ > global_timestamp ? \
-                global_timestamp : tx->end_;
-            //std::cout << "before try lock" << std::endl;
-            if(mutex_.try_lock() == true) {
-                // there exists an concurrent bug
-                tx->w_set_->Push(this, curr_version_num_);
-                new_ = curr_.Clone();
-                return new_;
-            }else {
-                sth_ptm_abort(tx);
-            }
+        //std::cout << "before try lock" << std::endl;
+        if(mutex_.try_lock() == true) {
+            // there exists an concurrent bug
+            tx->w_set_->Push(this, curr_version_num_);
+            new_ = curr_.Clone();
+            return new_;
         }else {
             sth_ptm_abort(tx);
         }
@@ -363,7 +350,7 @@ static jmp_buf *sth_ptm_start() {
     Transaction *tx;
     tx = GetThreadTransaction();
     tx->status_ = ACTIVE;
-    tx->start_ = ATOMIC_LOAD(&global_timestamp);
+    tx->start_ = global_counter;
     tx->end_ = INF;
     tx->is_readonly_ = true;
     tx->r_set_->Clear();
@@ -373,8 +360,9 @@ static jmp_buf *sth_ptm_start() {
 }
 
 static void sth_ptm_validate(Transaction *tx) {
-    if (tx->r_set_->Validate() == false)
+    if (tx->r_set_->Validate() == false) {
         sth_ptm_abort(tx);
+    }
 }
 
 /*
@@ -388,11 +376,17 @@ static void sth_ptm_commit() {
     if (tx->is_readonly_ == false) {
         sth_ptm_validate(tx);
         unsigned long long commit_timestamp;
-        commit_timestamp = ATOMIC_FETCH_ADD(&global_timestamp, 1);
+        commit_timestamp = global_counter + thread_counter;
+        thread_counter++;
+        if (thread_counter >= kMaxThreadCounter) {
+            thread_counter = 0;
+            ATOMIC_FETCH_ADD(&global_counter, 1);
+        }
         // commit writes
         tx->w_set_->CommitWrites(commit_timestamp, tx);
         tx->w_set_->Unlock();
-    }
+    } else if (tx->is_readonly_ == true) // will delete this
+        sth_ptm_validate(tx);
     tx->SetRC(tx->w_set_->GetEntriesNum());
     //mfence(); // we need a mfence here
     tx->status_ = COMMITTED;
@@ -400,7 +394,7 @@ static void sth_ptm_commit() {
 
 static void sth_ptm_abort(Transaction *tx) {
     tx->status_ = ACTIVE;
-    tx->start_ = ATOMIC_LOAD(&global_timestamp);
+    tx->start_ = global_counter;
     tx->end_ = INF;
     tx->is_readonly_ = true;
     tx->w_set_->FreeNew();
@@ -411,7 +405,6 @@ static void sth_ptm_abort(Transaction *tx) {
 }
 
 static Transaction *GetThreadTransaction() {
-    thread_local Transaction *thread_tx = nullptr;
     if (thread_tx == nullptr ||  thread_tx->status_ == COMMITTED)
         thread_tx = new Transaction();
     return thread_tx;
