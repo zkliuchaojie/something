@@ -3,7 +3,7 @@
 
 const unsigned long long kRwSetDefaultSize = 4096;
 const int kCacheLineSize = 64;
-const int kOldVersionsDefaultSize = 10;
+const int kOldVersionsDefaultSize = 2;
 const int kMaxThreadCounter = 16;
 
 #endif

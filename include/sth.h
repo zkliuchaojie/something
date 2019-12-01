@@ -141,7 +141,7 @@ public:
 
 };
 
-class alignas(kCacheLineSize) Transaction : public MMAbstractObject {
+class alignas(kCacheLineSize) Transaction {
 public:
     volatile TransactionStatus status_;
     unsigned long long start_;
@@ -167,31 +167,40 @@ public:
     }
  
     ~Transaction() {
-        delete r_set_;
-        delete w_set_;
+        if (r_set_ != nullptr)
+            delete r_set_;
+        if (w_set_ != nullptr)
+            delete w_set_;
     }
     
     void SetRC(int rc) {
         reference_count_ = rc;
     }
 
-    void DecRC() {
-        reference_count_--;
+    int DecAndFetchRC() {
+        return ATOMIC_SUB_FETCH(&reference_count_, 1);
     }
 
     bool IsSafeToFree() {
-        return reference_count_ == 0;
+        return ATOMIC_LOAD(&reference_count_) == 0;
+    }
+
+    void FreeReadSet() {
+        if (r_set_ != nullptr) {
+            delete r_set_;
+            r_set_ = nullptr;
+        }
     }
 };
 
 /*
  * All ptm objects should inherit this abstract class.
  */
-class AbstractPtmObject : public MMAbstractObject {
+class AbstractPtmObject {
 public:
     // refers: https://www.cnblogs.com/albizzia/p/8979078.html
     virtual ~AbstractPtmObject() {};
-    virtual AbstractPtmObject *Clone(bool is_use_mm) = 0;
+    virtual AbstractPtmObject *Clone() = 0;
     // copy ptm_object to this
     virtual void Copy(AbstractPtmObject *ptm_object) = 0;
     virtual void Free() = 0;
@@ -199,7 +208,7 @@ public:
 
 struct OldObject {
     unsigned long long version_num_;    // version_num_ can be a timestamp.
-    void *object_;
+    AbstractPtmObject *object_;
     Transaction *belonging_tx_;
 };
 
@@ -218,13 +227,20 @@ public:
         if (old_objects_ != nullptr)
             free(old_objects_);
     }
-    void Insert(unsigned long long version_num, void *object, \
-        Transaction *belonging_tx_) {
-        if (old_objects_[pos_].object_ != nullptr)
-             free(old_objects_[pos_].object_);
+    void Insert(unsigned long long version_num, AbstractPtmObject *curr, \
+        Transaction *belonging_tx) {
+        /* free object and dec reference counter */
+        if (old_objects_[pos_].belonging_tx_ != nullptr && \
+            old_objects_[pos_].belonging_tx_->DecAndFetchRC() == 0)
+            // it maybe not safe to delet tx directly
+            delete old_objects_[pos_].belonging_tx_;
+        if (old_objects_[pos_].object_ != nullptr) {
+            old_objects_[pos_].object_->Copy(curr);
+        } else {
+            old_objects_[pos_].object_ = curr->Clone();
+        }
         old_objects_[pos_].version_num_ = version_num;
-        old_objects_[pos_].object_ = object;
-        old_objects_[pos_].belonging_tx_ = belonging_tx_;
+        old_objects_[pos_].belonging_tx_ = belonging_tx;
         pos_ = (pos_ + 1) % kSize_;
     }
 private:
@@ -280,7 +296,7 @@ public:
     }
     void CommitWrite(unsigned long long commit_timestamp, Transaction *tx) {
         // put current version into olders first
-        olders_.Insert(curr_version_num_, curr_.Clone(false), curr_tx_);
+        olders_.Insert(curr_version_num_, &curr_, curr_tx_);
         // set current version info
         curr_tx_ = tx;
         //mfence // we need a mfence
@@ -290,8 +306,6 @@ public:
          * Therefore, readers must check the POW's transaction status.
          */
         curr_.Copy(new_);
-        new_->Free();
-        new_ = nullptr;
     }
     void Unlock() {
         mutex_.unlock();
@@ -307,9 +321,10 @@ private:
     Olders olders_;
 
     AbstractPtmObject *OpenWithRead(Transaction *tx) {
-        //std::cout << "OpenWithRead" << std::endl;
-        if (curr_tx_ != nullptr && curr_tx_->status_ != COMMITTED)
-            sth_ptm_abort(tx);
+        // std::cout << "OpenWithRead" << std::endl;
+        // if (curr_tx_ != nullptr && curr_tx_->status_ != COMMITTED)
+        //     sth_ptm_abort(tx);
+        // this overhead is very large
         if (tx->r_set_->DoesContain(this) == true)
             return &curr_;
         tx->r_set_->Push(this, curr_version_num_);
@@ -338,7 +353,9 @@ private:
         if(mutex_.try_lock() == true) {
             // there exists an concurrent bug
             tx->w_set_->Push(this, curr_version_num_);
-            new_ = curr_.Clone();
+            if (new_ == nullptr) {
+                new_ = curr_.Clone();
+            }
             return new_;
         }else {
             sth_ptm_abort(tx);
@@ -346,15 +363,19 @@ private:
     }
 };
 
-static jmp_buf *sth_ptm_start() {
-    Transaction *tx;
-    tx = GetThreadTransaction();
+void InitTransaction(Transaction *tx) {
     tx->status_ = ACTIVE;
     tx->start_ = global_counter;
     tx->end_ = INF;
     tx->is_readonly_ = true;
     tx->r_set_->Clear();
     tx->w_set_->Clear();
+}
+
+static jmp_buf *sth_ptm_start() {
+    Transaction *tx;
+    tx = GetThreadTransaction();
+    InitTransaction(tx);
     //std::cout << "start ptm" << std::endl;
     return &tx->env_;
 }
@@ -373,7 +394,9 @@ static void sth_ptm_commit() {
     tx = GetThreadTransaction();
     if (tx->status_ != ACTIVE)
         pr_info_and_exit("there is no active transactions");
-    if (tx->is_readonly_ == false) {
+    if (tx->is_readonly_ == true) {
+        tx->status_ = UNDETERMINED;
+    } else {
         sth_ptm_validate(tx);
         unsigned long long commit_timestamp;
         commit_timestamp = global_counter + thread_counter;
@@ -385,11 +408,11 @@ static void sth_ptm_commit() {
         // commit writes
         tx->w_set_->CommitWrites(commit_timestamp, tx);
         tx->w_set_->Unlock();
-    } else if (tx->is_readonly_ == true) // will delete this
-        sth_ptm_validate(tx);
-    tx->SetRC(tx->w_set_->GetEntriesNum());
-    //mfence(); // we need a mfence here
-    tx->status_ = COMMITTED;
+        tx->SetRC(tx->w_set_->GetEntriesNum());
+        tx->FreeReadSet();
+        // mfence(); // we need a mfence here
+        tx->status_ = COMMITTED;
+    }
 }
 
 static void sth_ptm_abort(Transaction *tx) {
@@ -405,7 +428,7 @@ static void sth_ptm_abort(Transaction *tx) {
 }
 
 static Transaction *GetThreadTransaction() {
-    if (thread_tx == nullptr ||  thread_tx->status_ == COMMITTED)
+    if (thread_tx == nullptr || thread_tx->status_ == COMMITTED)
         thread_tx = new Transaction();
     return thread_tx;
 }

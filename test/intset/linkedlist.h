@@ -17,8 +17,6 @@
 #include "intset.h"
 #endif
 
-#define USE_MM
-
 /*
  * PO means Ptm Object.
  */
@@ -32,19 +30,8 @@ public:
     PONode(Value_t val) : val_(val), next_(nullptr) {};
     PONode(Value_t val, PtmObjectWrapper<PONode> *next) : val_(val), next_(next) {};
     ~PONode() {};
-    AbstractPtmObject *Clone(bool is_use_mm = true) {
-        PONode *po_node;
-        if (is_use_mm == true) {
-#ifdef USE_MM
-        po_node = ((Pool<PONode> *)__mm_pool_)->Alloc();
-#else
-        po_node = (PONode *)malloc(sizeof(PONode));
-        new (po_node) PONode();
-#endif
-        } else {
-            po_node = (PONode *)malloc(sizeof(PONode));
-            new (po_node) PONode();
-        }
+    AbstractPtmObject *Clone() {
+        PONode *po_node = new PONode();
         po_node->val_ = val_;
         po_node->next_ = next_;
         return po_node;
@@ -55,17 +42,17 @@ public:
         next_ = po_node->next_;
     }
     void Free() {
-#ifdef USE_MM
-        ((Pool<PONode> *)__mm_pool_)->Free(this);
-#else
-        ;
-#endif
+// #ifdef USE_MM
+//         ((Pool<PONode> *)__mm_pool_)->Free(this);
+// #else
+//         ;
+// #endif
     }
     static void Destroy(void *object) {
-        MMAbstractObject *object_to_free = (MMAbstractObject *)object;
-        object_to_free->__next_=object_to_free->__owner_partition_->free_list_;
-        object_to_free->__owner_partition_->free_list_ = object_to_free;
-        object_to_free->__owner_partition_->allocated_num_--;
+        // MMAbstractObject *object_to_free = (MMAbstractObject *)object;
+        // object_to_free->__next_=object_to_free->__owner_partition_->free_list_;
+        // object_to_free->__owner_partition_->free_list_ = object_to_free;
+        // object_to_free->__owner_partition_->allocated_num_--;
     }
 };
 
@@ -80,12 +67,10 @@ public:
 
 public:
     LinkedList() {
-        po_node_pool_ = new Pool<PONode>();
         PTM_START;
         sentinel_ = new PtmObjectWrapper<PONode>();
         PONode *po_node = (PONode *)sentinel_->Open(INIT);
         po_node->next_ = sentinel_;
-        po_node->__mm_pool_ = po_node_pool_;
         PTM_COMMIT;
     };
     ~LinkedList() {
@@ -137,7 +122,6 @@ void LinkedList::Insert(Value_t val) {
     PONode *new_po_node = (PONode *)new_po_node_wrapper->Open(INIT);
     new_po_node->val_ = val;
     new_po_node->next_ = curr;
-    new_po_node->__mm_pool_ = po_node_pool_;
     po_node->next_ = new_po_node_wrapper;
     PTM_COMMIT;
 }
