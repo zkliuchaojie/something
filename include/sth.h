@@ -150,6 +150,8 @@ public:
     bool is_readonly_;
     RwSet *r_set_;
     RwSet *w_set_;
+    PtmObjectWrapperWithVersionNum *record_w_set_;
+    int record_w_set_num_;
     sigjmp_buf env_;
 public:
     /* 
@@ -162,8 +164,8 @@ public:
     Transaction() {
         status_ = UNDETERMINED;
         is_readonly_ = true;
-        r_set_ = new RwSet();
-        w_set_ = new RwSet();
+        r_set_ = nullptr;
+        w_set_ = nullptr;
         reference_count_ = 0;
     }
  
@@ -181,6 +183,13 @@ public:
 
     bool IsSafeToFree() {
         return ATOMIC_LOAD(&reference_count_) == 0;
+    }
+
+    void RecordWriteSet() {
+        record_w_set_num_ = w_set_->entries_num_;
+        record_w_set_ = (PtmObjectWrapperWithVersionNum *)malloc( \
+            record_w_set_num_ * sizeof(PtmObjectWrapperWithVersionNum));
+        memcpy(record_w_set_, w_set_->set_, record_w_set_num_ * sizeof(PtmObjectWrapperWithVersionNum));
     }
 };
 
@@ -399,6 +408,7 @@ static void sth_ptm_commit() {
         tx->w_set_->CommitWrites(commit_timestamp, tx);
         tx->w_set_->Unlock();
         tx->SetRC(tx->w_set_->GetEntriesNum());
+        tx->RecordWriteSet();
         // mfence(); // we need a mfence here
         tx->status_ = COMMITTED;
     }
