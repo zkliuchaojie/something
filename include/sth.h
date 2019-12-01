@@ -63,11 +63,13 @@ class PtmObjectWrapper;
 class Transaction;
 static Transaction *GetThreadTransaction();
 static void sth_ptm_abort(Transaction *tx);
+class RwSet;
 
 #define INF ((unsigned long long)(-1L))
 volatile unsigned long long global_counter = 0;
 thread_local unsigned int thread_counter = 0;
 thread_local Transaction *thread_tx = nullptr;
+thread_local RwSet *thread_r_set, *thread_w_set;
 
 class AbstractPtmObjectWrapper {
 public:
@@ -145,7 +147,6 @@ class alignas(kCacheLineSize) Transaction {
 public:
     volatile TransactionStatus status_;
     unsigned long long start_;
-    unsigned long long end_;
     bool is_readonly_;
     RwSet *r_set_;
     RwSet *w_set_;
@@ -167,10 +168,7 @@ public:
     }
  
     ~Transaction() {
-        if (r_set_ != nullptr)
-            delete r_set_;
-        if (w_set_ != nullptr)
-            delete w_set_;
+        ;
     }
     
     void SetRC(int rc) {
@@ -183,13 +181,6 @@ public:
 
     bool IsSafeToFree() {
         return ATOMIC_LOAD(&reference_count_) == 0;
-    }
-
-    void FreeReadSet() {
-        if (r_set_ != nullptr) {
-            delete r_set_;
-            r_set_ = nullptr;
-        }
     }
 };
 
@@ -366,7 +357,6 @@ private:
 void InitTransaction(Transaction *tx) {
     tx->status_ = ACTIVE;
     tx->start_ = global_counter;
-    tx->end_ = INF;
     tx->is_readonly_ = true;
     tx->r_set_->Clear();
     tx->w_set_->Clear();
@@ -409,7 +399,6 @@ static void sth_ptm_commit() {
         tx->w_set_->CommitWrites(commit_timestamp, tx);
         tx->w_set_->Unlock();
         tx->SetRC(tx->w_set_->GetEntriesNum());
-        tx->FreeReadSet();
         // mfence(); // we need a mfence here
         tx->status_ = COMMITTED;
     }
@@ -418,7 +407,6 @@ static void sth_ptm_commit() {
 static void sth_ptm_abort(Transaction *tx) {
     tx->status_ = ACTIVE;
     tx->start_ = global_counter;
-    tx->end_ = INF;
     tx->is_readonly_ = true;
     tx->w_set_->FreeNew();
     tx->w_set_->Unlock();
@@ -428,8 +416,15 @@ static void sth_ptm_abort(Transaction *tx) {
 }
 
 static Transaction *GetThreadTransaction() {
-    if (thread_tx == nullptr || thread_tx->status_ == COMMITTED)
+    if (thread_tx == nullptr || thread_tx->status_ == COMMITTED) {
+        if (thread_r_set == nullptr)
+            thread_r_set = new RwSet();
+        if (thread_w_set == nullptr)
+            thread_w_set = new RwSet();
         thread_tx = new Transaction();
+        thread_tx->r_set_ = thread_r_set;
+        thread_tx->w_set_ = thread_w_set;
+    }
     return thread_tx;
 }
 
