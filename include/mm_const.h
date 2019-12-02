@@ -11,5 +11,6 @@ const int kPoolSize = 64 * 1024;
 const int kPartitionNum = 4;
 // each thread occupies one epoch entry
 const int kEpochTableSize = 128;
+const int kBloomFilterSize = 64;
 
 #endif
