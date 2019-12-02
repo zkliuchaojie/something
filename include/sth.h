@@ -9,6 +9,10 @@
 #include "sth_atomic.h"
 #endif
 
+#ifndef PERSIST_H_
+#include "persist.h"
+#endif
+
 #ifndef MM_POOL_H_
 #include "mm_pool.h"
 #endif
@@ -301,8 +305,8 @@ public:
         // put current version into olders first
         olders_.Insert(curr_version_num_, &curr_, curr_tx_);
         // set current version info
+        // we need a atomic operation to store curr_tx_ and curr_version_num_
         curr_tx_ = tx;
-        //mfence // we need a mfence
         curr_version_num_ = commit_timestamp;
         /*
          * Since the copy func is not atomic, readers may read partial new data.
@@ -325,8 +329,8 @@ private:
 
     AbstractPtmObject *OpenWithRead(Transaction *tx) {
         // std::cout << "OpenWithRead" << std::endl;
-        // if (curr_tx_ != nullptr && curr_tx_->status_ != COMMITTED)
-        //     sth_ptm_abort(tx);
+        if (curr_tx_ != nullptr && curr_tx_->status_ != COMMITTED)
+            sth_ptm_abort(tx);
         // this overhead is very large
         // if (tx->r_set_->DoesContain(this) == true)
         //     return &curr_;
@@ -412,7 +416,7 @@ static void sth_ptm_commit() {
         tx->w_set_->Unlock();
         tx->SetRC(tx->w_set_->GetEntriesNum());
         tx->RecordWriteSet();
-        // mfence(); // we need a mfence here
+        mfence(); // we need a mfence here
         tx->status_ = COMMITTED;
     }
 }
