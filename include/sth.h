@@ -73,8 +73,10 @@ class RwSet;
 volatile unsigned long long global_counter = 0;
 thread_local unsigned int thread_counter = 0;
 thread_local Transaction *thread_tx = nullptr;
-thread_local RwSet *thread_r_set, *thread_w_set;
-thread_local sigjmp_buf *thread_env_;
+thread_local RwSet *thread_r_set = nullptr;
+thread_local RwSet *thread_w_set = nullptr;
+thread_local sigjmp_buf *thread_env_ = nullptr;
+thread_local unsigned long thread_abort_counter = 0;
 
 class AbstractPtmObjectWrapper {
 public:
@@ -429,6 +431,7 @@ static void sth_ptm_abort(Transaction *tx) {
     tx->w_set_->Unlock();
     tx->r_set_->Clear();
     tx->w_set_->Clear();
+    thread_abort_counter++;
     siglongjmp(*(tx->env_), 1);
 }
 
