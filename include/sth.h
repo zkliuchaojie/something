@@ -70,6 +70,7 @@ volatile unsigned long long global_counter = 0;
 thread_local unsigned int thread_counter = 0;
 thread_local Transaction *thread_tx = nullptr;
 thread_local RwSet *thread_r_set, *thread_w_set;
+thread_local sigjmp_buf *thread_env_;
 
 class AbstractPtmObjectWrapper {
 public:
@@ -143,22 +144,23 @@ public:
 
 };
 
-class alignas(kCacheLineSize) Transaction {
+// class alignas(kCacheLineSize) Transaction {
+class Transaction {
 public:
-    volatile TransactionStatus status_;
     unsigned long long start_;
-    bool is_readonly_;
     RwSet *r_set_;
     RwSet *w_set_;
+    sigjmp_buf *env_;
     PtmObjectWrapperWithVersionNum *record_w_set_;
     int record_w_set_num_;
-    sigjmp_buf env_;
+    volatile TransactionStatus status_;
+    bool is_readonly_;
 public:
-    /* 
-     * recording how many objects refers this tx, if is 0, 
+    /*
+     * recording how many objects refers this tx, if is 0,
      * then we can free this tx.
      */
-    int reference_count_;   
+    int reference_count_;
 
 public:
     Transaction() {
@@ -167,6 +169,7 @@ public:
         r_set_ = nullptr;
         w_set_ = nullptr;
         reference_count_ = 0;
+        env_ = nullptr;
     }
  
     ~Transaction() {
@@ -325,8 +328,8 @@ private:
         // if (curr_tx_ != nullptr && curr_tx_->status_ != COMMITTED)
         //     sth_ptm_abort(tx);
         // this overhead is very large
-        if (tx->r_set_->DoesContain(this) == true)
-            return &curr_;
+        // if (tx->r_set_->DoesContain(this) == true)
+        //     return &curr_;
         tx->r_set_->Push(this, curr_version_num_);
         return &curr_;
     }
@@ -376,7 +379,7 @@ static jmp_buf *sth_ptm_start() {
     tx = GetThreadTransaction();
     InitTransaction(tx);
     //std::cout << "start ptm" << std::endl;
-    return &tx->env_;
+    return tx->env_;
 }
 
 static void sth_ptm_validate(Transaction *tx) {
@@ -422,7 +425,7 @@ static void sth_ptm_abort(Transaction *tx) {
     tx->w_set_->Unlock();
     tx->r_set_->Clear();
     tx->w_set_->Clear();
-    siglongjmp(tx->env_, 1);
+    siglongjmp(*(tx->env_), 1);
 }
 
 static Transaction *GetThreadTransaction() {
@@ -431,9 +434,12 @@ static Transaction *GetThreadTransaction() {
             thread_r_set = new RwSet();
         if (thread_w_set == nullptr)
             thread_w_set = new RwSet();
+        if (thread_env_ == nullptr)
+            thread_env_ = (sigjmp_buf *)malloc(sizeof(sigjmp_buf));
         thread_tx = new Transaction();
         thread_tx->r_set_ = thread_r_set;
         thread_tx->w_set_ = thread_w_set;
+        thread_tx->env_ = thread_env_;
     }
     return thread_tx;
 }
