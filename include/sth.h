@@ -83,19 +83,14 @@ volatile unsigned long long thread_timestamps[kMaxThreadNum]={0};
 
 // thread things
 thread_local Transaction *thread_tx = nullptr;
-thread_local RwSet *thread_r_set = nullptr;
-thread_local RwSet *thread_w_set = nullptr;
-thread_local sigjmp_buf *thread_env_ = nullptr;
 thread_local unsigned long long thread_abort_counter = 0;
 thread_local int thread_id = -1;
-thread_local unsigned long long thread_starts[kMaxThreadNum];
-thread_local unsigned long long thread_ends[kMaxThreadNum];
 
 class AbstractPtmObjectWrapper {
 public:
     virtual void FreeNew() = 0;
     virtual bool Validate(unsigned long long version_num) = 0;
-    virtual void CommitWrite(unsigned long long commit_timestamp, Transaction *tx) = 0;
+    virtual void CommitWrite(unsigned long long commit_timestamp, TransactionStatus *tx_status) = 0;
     virtual void Unlock() = 0;
     virtual ~AbstractPtmObjectWrapper() {};
 };
@@ -145,9 +140,9 @@ public:
         }
         return true;
     }
-    void CommitWrites(unsigned long long ti_and_ts, Transaction *tx) {
+    void CommitWrites(unsigned long long ti_and_ts, TransactionStatus *tx_status) {
         for (int i=0; i<entries_num_; i++) {
-            set_[i].ptm_object_wrapper_->CommitWrite(ti_and_ts, tx);    
+            set_[i].ptm_object_wrapper_->CommitWrite(ti_and_ts, tx_status);
         }
     }
     void Unlock() {
@@ -175,48 +170,31 @@ public:
     RwSet *r_set_;
     RwSet *w_set_;
     sigjmp_buf *env_;
-    PtmObjectWrapperWithVersionNum *record_w_set_;
-    int record_w_set_num_;
     volatile TransactionStatus status_;
     bool is_readonly_;
-public:
-    /*
-     * recording how many objects refers this tx, if is 0,
-     * then we can free this tx.
-     */
-    int reference_count_;
 
 public:
     Transaction() {
         status_ = UNDETERMINED;
         is_readonly_ = true;
-        r_set_ = nullptr;
-        w_set_ = nullptr;
-        reference_count_ = 0;
-        env_ = nullptr;
+        starts_ = new unsigned long long[kMaxThreadNum];
+        ends_ = new unsigned long long[kMaxThreadNum];
+        r_set_ = new RwSet();
+        w_set_ = new RwSet();
+        env_ = (sigjmp_buf *)malloc(sizeof(sigjmp_buf));
     }
  
     ~Transaction() {
-        ;
-    }
-    
-    void SetRC(int rc) {
-        reference_count_ = rc;
-    }
-
-    int DecAndFetchRC() {
-        return ATOMIC_SUB_FETCH(&reference_count_, 1);
-    }
-
-    bool IsSafeToFree() {
-        return ATOMIC_LOAD(&reference_count_) == 0;
-    }
-
-    void RecordWriteSet() {
-        record_w_set_num_ = w_set_->entries_num_;
-        record_w_set_ = (PtmObjectWrapperWithVersionNum *)malloc( \
-            record_w_set_num_ * sizeof(PtmObjectWrapperWithVersionNum));
-        memcpy(record_w_set_, w_set_->set_, record_w_set_num_ * sizeof(PtmObjectWrapperWithVersionNum));
+        if (starts_ != nullptr)
+            delete [] starts_;
+        if (ends_ != nullptr)
+            delete [] ends_;
+        if (r_set_ != nullptr)
+            delete r_set_;
+        if (w_set_ != nullptr)
+            delete w_set_;
+        if (env_ != nullptr)
+            free(env_);
     }
 };
 
@@ -236,7 +214,6 @@ public:
 struct OldObject {
     unsigned long long ti_and_ts_;    // version_num_ can be a timestamp.
     AbstractPtmObject *object_;
-    Transaction *belonging_tx_;
 };
 
 /*
@@ -254,20 +231,13 @@ public:
         if (old_objects_ != nullptr)
             free(old_objects_);
     }
-    void Insert(unsigned long long ti_and_ts, AbstractPtmObject *curr, \
-        Transaction *belonging_tx) {
-        /* free object and dec reference counter */
-        if (old_objects_[pos_].belonging_tx_ != nullptr && \
-            old_objects_[pos_].belonging_tx_->DecAndFetchRC() == 0)
-            // it maybe not safe to delet tx directly
-            delete old_objects_[pos_].belonging_tx_;
+    void Insert(unsigned long long ti_and_ts, AbstractPtmObject *curr) {
         if (old_objects_[pos_].object_ != nullptr) {
             old_objects_[pos_].object_->Copy(curr);
         } else {
             old_objects_[pos_].object_ = curr->Clone();
         }
         old_objects_[pos_].ti_and_ts_ = ti_and_ts;
-        old_objects_[pos_].belonging_tx_ = belonging_tx;
         pos_ = (pos_ + 1) % kSize_;
     }
 private:
@@ -288,7 +258,7 @@ public:
         tx = GetThreadTransaction();
         if(tx->status_ !=  ACTIVE)
             pr_info_and_exit("there is no active transactions");
-        curr_tx_ = nullptr;     // init with nullptr
+        curr_tx_status_ = nullptr;     // init with nullptr
         curr_ti_and_ts_ = 0;  // version num starts from 0
         new (&curr_) T();
         new_ = nullptr;
@@ -321,12 +291,12 @@ public:
             return false;
         return true;
     }
-    void CommitWrite(unsigned long long ti_and_ts, Transaction *tx) {
+    void CommitWrite(unsigned long long ti_and_ts, TransactionStatus *tx_status) {
         // put current version into olders first
-        olders_.Insert(curr_ti_and_ts_, &curr_, curr_tx_);
+        olders_.Insert(curr_ti_and_ts_, &curr_);
         // set current version info
         // we need a atomic operation to store curr_tx_ and curr_version_num_
-        curr_tx_ = tx;
+        curr_tx_status_ = tx_status;
         curr_ti_and_ts_ = ti_and_ts;
         /*
          * Since the copy func is not atomic, readers may read partial new data.
@@ -339,7 +309,7 @@ public:
     }
 
 private:
-    Transaction *curr_tx_;
+    TransactionStatus *curr_tx_status_;
     // ti means thread id, ts means timestamp
     unsigned long long curr_ti_and_ts_;    // version_num_ can be a timestamp.
     T curr_;
@@ -350,7 +320,7 @@ private:
 
     AbstractPtmObject *OpenWithRead(Transaction *tx) {
         // std::cout << "OpenWithRead" << std::endl;
-        if (curr_tx_ != nullptr && curr_tx_->status_ != COMMITTED)
+        if (curr_tx_status_ != nullptr && *curr_tx_status_ != COMMITTED)
             sth_ptm_abort(tx);
         if (TS(curr_ti_and_ts_) <= tx->ends_[TI(curr_ti_and_ts_)]) {
             tx->starts_[TI(curr_ti_and_ts_)] = \
@@ -383,7 +353,7 @@ private:
      */
     AbstractPtmObject *OpenWithWrite(Transaction *tx) {
         //std::cout << "OpenWithWrite" << std::endl;
-        if (curr_tx_!=nullptr && curr_tx_->status_ != COMMITTED)
+        if (curr_tx_status_!=nullptr && *curr_tx_status_ != COMMITTED)
             sth_ptm_abort(tx);
         if (TS(curr_ti_and_ts_) <= tx->ends_[TI(curr_ti_and_ts_)]) {
             if(tx->is_readonly_ == true)
@@ -411,7 +381,6 @@ private:
         }else {
             sth_ptm_abort(tx);
         }
-        
     }
 };
 
@@ -449,9 +418,7 @@ static void sth_ptm_commit() {
     tx = GetThreadTransaction();
     if (tx->status_ != ACTIVE)
         pr_info_and_exit("there is no active transactions");
-    if (tx->is_readonly_ == true) {
-        tx->status_ = UNDETERMINED;
-    } else {
+    if (tx->is_readonly_ == false) {
         sth_ptm_validate(tx);
         unsigned long long commit_ts = thread_timestamps[thread_id];
         if (tx->objects_biggest_ts_ >= commit_ts)
@@ -459,12 +426,12 @@ static void sth_ptm_commit() {
         thread_timestamps[thread_id] = commit_ts + 1;
         //std::cout << "commit: " << thread_id << ", " << thread_timestamps[thread_id] << std::endl;
         // commit writes
-        tx->w_set_->CommitWrites(TI_AND_TS(thread_id, commit_ts), tx);
+        TransactionStatus *tx_status = new TransactionStatus;
+        *tx_status = tx->status_;
+        tx->w_set_->CommitWrites(TI_AND_TS(thread_id, commit_ts), tx_status);
         tx->w_set_->Unlock();
-        tx->SetRC(tx->w_set_->GetEntriesNum());
-        tx->RecordWriteSet();
         mfence(); // we need a mfence here
-        tx->status_ = COMMITTED;
+        *tx_status = tx->status_ = COMMITTED;
     }
 }
 
@@ -481,19 +448,8 @@ static Transaction *GetThreadTransaction() {
         thread_id = ATOMIC_FETCH_ADD(&thread_id_allocator, 1);
         // std::cout << "thread_id: " << thread_id << std::endl;
     }
-    if (thread_tx == nullptr || thread_tx->status_ == COMMITTED) {
-        if (thread_r_set == nullptr)
-            thread_r_set = new RwSet();
-        if (thread_w_set == nullptr)
-            thread_w_set = new RwSet();
-        if (thread_env_ == nullptr)
-            thread_env_ = (sigjmp_buf *)malloc(sizeof(sigjmp_buf));
+    if (thread_tx == nullptr) {
         thread_tx = new Transaction();
-        thread_tx->r_set_ = thread_r_set;
-        thread_tx->w_set_ = thread_w_set;
-        thread_tx->env_ = thread_env_;
-        thread_tx->starts_ = thread_starts;
-        thread_tx->ends_ = thread_ends;
     }
     return thread_tx;
 }
