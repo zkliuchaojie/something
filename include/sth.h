@@ -30,6 +30,13 @@
 #include <setjmp.h>
 #include <mutex>
 #include <cstring>
+#include <algorithm>
+
+#define TI_AND_TS(ti, ts)   (((unsigned long long)ti<<(sizeof(unsigned long long)*8-kThreadIdBitSize)) | (ts))
+#define TS(ti_and_ts)       ((ti_and_ts << kThreadIdBitSize) >> kThreadIdBitSize)
+#define TI(ti_and_ts)       (ti_and_ts >> (sizeof(unsigned long long)*8-kThreadIdBitSize))
+#define MAX(v1, v2)         (v1>v2 ? v1 : v2)
+#define MIN(v1, v2)         (v1>v2 ? v2 : v1)
 
 #define pr_info_and_exit(str) do { \
     std::cout << str << ", FILE: " << __FILE__ << \
@@ -70,13 +77,19 @@ static void sth_ptm_abort(Transaction *tx);
 class RwSet;
 
 #define INF ((unsigned long long)(-1L))
-volatile unsigned long long global_counter = 0;
-thread_local unsigned int thread_counter = 0;
+// global things
+volatile int thread_id_allocator = 0;
+volatile unsigned long long thread_timestamps[kMaxThreadNum]={0};
+
+// thread things
 thread_local Transaction *thread_tx = nullptr;
 thread_local RwSet *thread_r_set = nullptr;
 thread_local RwSet *thread_w_set = nullptr;
 thread_local sigjmp_buf *thread_env_ = nullptr;
-thread_local unsigned long thread_abort_counter = 0;
+thread_local unsigned long long thread_abort_counter = 0;
+thread_local int thread_id = -1;
+thread_local unsigned long long thread_starts[kMaxThreadNum];
+thread_local unsigned long long thread_ends[kMaxThreadNum];
 
 class AbstractPtmObjectWrapper {
 public:
@@ -89,7 +102,7 @@ public:
 
 struct PtmObjectWrapperWithVersionNum {
     AbstractPtmObjectWrapper *ptm_object_wrapper_;
-    unsigned long long version_num_;
+    unsigned long long ti_and_ts_;
 };
 
 class RwSet {
@@ -112,10 +125,10 @@ public:
     void Clear() {
         entries_num_ = 0;
     }
-    void Push(AbstractPtmObjectWrapper *ptm_object_wrapper, unsigned long long version_num) {
+    void Push(AbstractPtmObjectWrapper *ptm_object_wrapper, unsigned long long ti_and_ts) {
         // TODO: realloc
         set_[entries_num_].ptm_object_wrapper_ = ptm_object_wrapper;
-        set_[entries_num_].version_num_ = version_num;
+        set_[entries_num_].ti_and_ts_ = ti_and_ts;
         entries_num_++;
     }
     bool DoesContain(AbstractPtmObjectWrapper *ptm_object_wrapper) {
@@ -127,14 +140,14 @@ public:
     }
     bool Validate() {
         for (int i=0; i<entries_num_; i++) {
-            if (set_[i].ptm_object_wrapper_->Validate(set_[i].version_num_) == false)
+            if (set_[i].ptm_object_wrapper_->Validate(set_[i].ti_and_ts_) == false)
                 return false;
         }
         return true;
     }
-    void CommitWrites(unsigned long long commit_timestamp, Transaction *tx) {
+    void CommitWrites(unsigned long long ti_and_ts, Transaction *tx) {
         for (int i=0; i<entries_num_; i++) {
-            set_[i].ptm_object_wrapper_->CommitWrite(commit_timestamp, tx);    
+            set_[i].ptm_object_wrapper_->CommitWrite(ti_and_ts, tx);    
         }
     }
     void Unlock() {
@@ -153,7 +166,12 @@ public:
 // class alignas(kCacheLineSize) Transaction {
 class Transaction {
 public:
-    unsigned long long start_;
+    /*
+     * starts_ are used to record all threads' starting time,
+     * which is similar to ends_.
+     */
+    unsigned long long *starts_, *ends_;
+    unsigned long long objects_biggest_ts_;
     RwSet *r_set_;
     RwSet *w_set_;
     sigjmp_buf *env_;
@@ -216,7 +234,7 @@ public:
 };
 
 struct OldObject {
-    unsigned long long version_num_;    // version_num_ can be a timestamp.
+    unsigned long long ti_and_ts_;    // version_num_ can be a timestamp.
     AbstractPtmObject *object_;
     Transaction *belonging_tx_;
 };
@@ -236,7 +254,7 @@ public:
         if (old_objects_ != nullptr)
             free(old_objects_);
     }
-    void Insert(unsigned long long version_num, AbstractPtmObject *curr, \
+    void Insert(unsigned long long ti_and_ts, AbstractPtmObject *curr, \
         Transaction *belonging_tx) {
         /* free object and dec reference counter */
         if (old_objects_[pos_].belonging_tx_ != nullptr && \
@@ -248,7 +266,7 @@ public:
         } else {
             old_objects_[pos_].object_ = curr->Clone();
         }
-        old_objects_[pos_].version_num_ = version_num;
+        old_objects_[pos_].ti_and_ts_ = ti_and_ts;
         old_objects_[pos_].belonging_tx_ = belonging_tx;
         pos_ = (pos_ + 1) % kSize_;
     }
@@ -271,7 +289,7 @@ public:
         if(tx->status_ !=  ACTIVE)
             pr_info_and_exit("there is no active transactions");
         curr_tx_ = nullptr;     // init with nullptr
-        curr_version_num_ = 0;  // version num starts from 0
+        curr_ti_and_ts_ = 0;  // version num starts from 0
         new (&curr_) T();
         new_ = nullptr;
     }
@@ -298,18 +316,18 @@ public:
         new_->Free();
         new_ = nullptr;
     }
-    bool Validate(unsigned long long version_num) {
-        if (curr_version_num_ != version_num)
+    bool Validate(unsigned long long ti_and_ts) {
+        if (curr_ti_and_ts_ != ti_and_ts)
             return false;
         return true;
     }
-    void CommitWrite(unsigned long long commit_timestamp, Transaction *tx) {
+    void CommitWrite(unsigned long long ti_and_ts, Transaction *tx) {
         // put current version into olders first
-        olders_.Insert(curr_version_num_, &curr_, curr_tx_);
+        olders_.Insert(curr_ti_and_ts_, &curr_, curr_tx_);
         // set current version info
         // we need a atomic operation to store curr_tx_ and curr_version_num_
         curr_tx_ = tx;
-        curr_version_num_ = commit_timestamp;
+        curr_ti_and_ts_ = ti_and_ts;
         /*
          * Since the copy func is not atomic, readers may read partial new data.
          * Therefore, readers must check the POW's transaction status.
@@ -322,7 +340,8 @@ public:
 
 private:
     Transaction *curr_tx_;
-    unsigned long long curr_version_num_;    // version_num_ can be a timestamp.
+    // ti means thread id, ts means timestamp
+    unsigned long long curr_ti_and_ts_;    // version_num_ can be a timestamp.
     T curr_;
     AbstractPtmObject *new_;
     std::mutex mutex_;
@@ -333,11 +352,24 @@ private:
         // std::cout << "OpenWithRead" << std::endl;
         if (curr_tx_ != nullptr && curr_tx_->status_ != COMMITTED)
             sth_ptm_abort(tx);
-        // this overhead is very large
-        // if (tx->r_set_->DoesContain(this) == true)
-        //     return &curr_;
-        tx->r_set_->Push(this, curr_version_num_);
-        return &curr_;
+        if (TS(curr_ti_and_ts_) <= tx->ends_[TI(curr_ti_and_ts_)]) {
+            tx->starts_[TI(curr_ti_and_ts_)] = \
+                MAX(tx->starts_[TI(curr_ti_and_ts_)], TS(curr_ti_and_ts_));
+            tx->ends_[TI(curr_ti_and_ts_)] = \
+                MIN(tx->ends_[TI(curr_ti_and_ts_)], thread_timestamps[TI(curr_ti_and_ts_)]);
+            // this overhead is very large
+            // if (tx->r_set_->DoesContain(this) == true)
+            //     return &curr_;
+            tx->r_set_->Push(this, curr_ti_and_ts_);
+            return &curr_;
+        } else {
+            // std::cout << "thread_id: " << thread_id << std::endl;
+            // std::cout << "thread id: " << TI(curr_ti_and_ts_) << std::endl;
+            // std::cout << thread_timestamps[TI(curr_ti_and_ts_)] << std::endl;
+            // std::cout << TS(curr_ti_and_ts_) << std::endl;
+            // std::cout << tx->ends_[TI(curr_ti_and_ts_)] << std::endl;
+            sth_ptm_abort(tx);
+        }
     }
     /*
      * OpenWithInit is used to init a new PtmObjectWrapper.
@@ -353,31 +385,52 @@ private:
         //std::cout << "OpenWithWrite" << std::endl;
         if (curr_tx_!=nullptr && curr_tx_->status_ != COMMITTED)
             sth_ptm_abort(tx);
-        if(tx->is_readonly_ == true)
-            tx->is_readonly_ = false;
-        // check if we already put this object into write set
-        if (tx->w_set_->DoesContain(this) == true)
-            return new_;
-        //std::cout << "before try lock" << std::endl;
-        if(mutex_.try_lock() == true) {
-            // there exists an concurrent bug
-            tx->w_set_->Push(this, curr_version_num_);
-            if (new_ == nullptr) {
-                new_ = curr_.Clone();
+        if (TS(curr_ti_and_ts_) <= tx->ends_[TI(curr_ti_and_ts_)]) {
+            if(tx->is_readonly_ == true)
+                tx->is_readonly_ = false;
+            // check if we already put this object into write set
+            if (tx->w_set_->DoesContain(this) == true)
+                return new_;
+            //std::cout << "before try lock" << std::endl;
+            if(mutex_.try_lock() == true) {
+                // update tx.starts_ and tx.ends_
+                tx->starts_[TI(curr_ti_and_ts_)] = \
+                    MAX(tx->starts_[TI(curr_ti_and_ts_)], TS(curr_ti_and_ts_));
+                tx->ends_[TI(curr_ti_and_ts_)] = \
+                    MIN(tx->ends_[TI(curr_ti_and_ts_)], thread_timestamps[TI(curr_ti_and_ts_)]);
+                // there exists an concurrent bug
+                tx->w_set_->Push(this, curr_ti_and_ts_);
+                if (TS(curr_ti_and_ts_) > tx->objects_biggest_ts_)
+                    tx->objects_biggest_ts_ = TS(curr_ti_and_ts_);
+                if (new_ == nullptr)
+                    new_ = curr_.Clone();
+                return new_;
+            }else {
+                sth_ptm_abort(tx);
             }
-            return new_;
         }else {
             sth_ptm_abort(tx);
         }
+        
     }
 };
 
 void InitTransaction(Transaction *tx) {
+    for (int i=0; i<kMaxThreadNum; i++) {
+        tx->starts_[i] = thread_timestamps[i];
+        tx->ends_[i] = INF;
+    }
+    tx->objects_biggest_ts_ = 0;
     tx->status_ = ACTIVE;
-    tx->start_ = global_counter;
     tx->is_readonly_ = true;
     tx->r_set_->Clear();
     tx->w_set_->Clear();
+}
+
+static void sth_ptm_validate(Transaction *tx) {
+    if (tx->r_set_->Validate() == false) {
+        sth_ptm_abort(tx);
+    }
 }
 
 static jmp_buf *sth_ptm_start() {
@@ -386,12 +439,6 @@ static jmp_buf *sth_ptm_start() {
     InitTransaction(tx);
     //std::cout << "start ptm" << std::endl;
     return tx->env_;
-}
-
-static void sth_ptm_validate(Transaction *tx) {
-    if (tx->r_set_->Validate() == false) {
-        sth_ptm_abort(tx);
-    }
 }
 
 /*
@@ -406,15 +453,13 @@ static void sth_ptm_commit() {
         tx->status_ = UNDETERMINED;
     } else {
         sth_ptm_validate(tx);
-        unsigned long long commit_timestamp;
-        commit_timestamp = global_counter + thread_counter;
-        thread_counter++;
-        if (thread_counter >= kMaxThreadCounter) {
-            thread_counter = 0;
-            ATOMIC_FETCH_ADD(&global_counter, 1);
-        }
+        unsigned long long commit_ts = thread_timestamps[thread_id];
+        if (tx->objects_biggest_ts_ >= commit_ts)
+            commit_ts = tx->objects_biggest_ts_ + 1;
+        thread_timestamps[thread_id] = commit_ts + 1;
+        //std::cout << "commit: " << thread_id << ", " << thread_timestamps[thread_id] << std::endl;
         // commit writes
-        tx->w_set_->CommitWrites(commit_timestamp, tx);
+        tx->w_set_->CommitWrites(TI_AND_TS(thread_id, commit_ts), tx);
         tx->w_set_->Unlock();
         tx->SetRC(tx->w_set_->GetEntriesNum());
         tx->RecordWriteSet();
@@ -424,18 +469,18 @@ static void sth_ptm_commit() {
 }
 
 static void sth_ptm_abort(Transaction *tx) {
-    tx->status_ = ACTIVE;
-    tx->start_ = global_counter;
-    tx->is_readonly_ = true;
     tx->w_set_->FreeNew();
     tx->w_set_->Unlock();
-    tx->r_set_->Clear();
-    tx->w_set_->Clear();
+    InitTransaction(tx);
     thread_abort_counter++;
     siglongjmp(*(tx->env_), 1);
 }
 
 static Transaction *GetThreadTransaction() {
+    if (thread_id == -1) {
+        thread_id = ATOMIC_FETCH_ADD(&thread_id_allocator, 1);
+        // std::cout << "thread_id: " << thread_id << std::endl;
+    }
     if (thread_tx == nullptr || thread_tx->status_ == COMMITTED) {
         if (thread_r_set == nullptr)
             thread_r_set = new RwSet();
@@ -447,6 +492,8 @@ static Transaction *GetThreadTransaction() {
         thread_tx->r_set_ = thread_r_set;
         thread_tx->w_set_ = thread_w_set;
         thread_tx->env_ = thread_env_;
+        thread_tx->starts_ = thread_starts;
+        thread_tx->ends_ = thread_ends;
     }
     return thread_tx;
 }
