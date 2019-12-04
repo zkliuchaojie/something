@@ -83,8 +83,9 @@ volatile unsigned long long thread_timestamps[kMaxThreadNum]={0};
 
 // thread things
 thread_local Transaction *thread_tx = nullptr;
-thread_local unsigned long long thread_abort_counter = 0;
 thread_local int thread_id = -1;
+thread_local unsigned long long thread_read_abort_counter = 0;
+thread_local unsigned long long thread_abort_counter = 0;
 
 class AbstractPtmObjectWrapper {
 public:
@@ -338,6 +339,7 @@ private:
             // std::cout << thread_timestamps[TI(curr_ti_and_ts_)] << std::endl;
             // std::cout << TS(curr_ti_and_ts_) << std::endl;
             // std::cout << tx->ends_[TI(curr_ti_and_ts_)] << std::endl;
+            thread_read_abort_counter++;
             sth_ptm_abort(tx);
         }
     }
