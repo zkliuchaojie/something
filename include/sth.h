@@ -241,6 +241,21 @@ public:
         old_objects_[pos_].ti_and_ts_ = ti_and_ts;
         pos_ = (pos_ + 1) % kSize_;
     }
+    OldObject *Search(unsigned long long *starts_, unsigned long long *ends_) {
+        OldObject *old_object;
+        for (int i=0; i<kSize_; i++) {
+            old_object = &old_objects_[(pos_+i)%kSize_];
+            if (old_object->object_ == nullptr)
+                return nullptr;
+            if (TS(old_object->ti_and_ts_) <= ends_[TI(old_object->ti_and_ts_)]) {
+                return old_object;
+            } else {
+                ends_[TI(old_object->ti_and_ts_)] = \
+                    MIN(ends_[TI(old_object->ti_and_ts_)], TS(old_object->ti_and_ts_));
+            }
+        }
+        return nullptr;
+    }
 private:
     const int kSize_;
     int pos_;   // pointing to a position that we can insert
@@ -323,7 +338,9 @@ private:
         // std::cout << "OpenWithRead" << std::endl;
         if (curr_tx_status_ != nullptr && *curr_tx_status_ != COMMITTED)
             sth_ptm_abort(tx);
-        if (TS(curr_ti_and_ts_) <= tx->ends_[TI(curr_ti_and_ts_)]) {
+
+        if ((curr_tx_status_ == nullptr || *curr_tx_status_ == COMMITTED) \
+            && (TS(curr_ti_and_ts_) <= tx->ends_[TI(curr_ti_and_ts_)])) {
             tx->starts_[TI(curr_ti_and_ts_)] = \
                 MAX(tx->starts_[TI(curr_ti_and_ts_)], TS(curr_ti_and_ts_));
             tx->ends_[TI(curr_ti_and_ts_)] = \
@@ -333,15 +350,23 @@ private:
             //     return &curr_;
             tx->r_set_->Push(this, curr_ti_and_ts_);
             return &curr_;
-        } else {
-            // std::cout << "thread_id: " << thread_id << std::endl;
-            // std::cout << "thread id: " << TI(curr_ti_and_ts_) << std::endl;
-            // std::cout << thread_timestamps[TI(curr_ti_and_ts_)] << std::endl;
-            // std::cout << TS(curr_ti_and_ts_) << std::endl;
-            // std::cout << tx->ends_[TI(curr_ti_and_ts_)] << std::endl;
-            thread_read_abort_counter++;
-            sth_ptm_abort(tx);
+        } else if (tx->is_readonly_ == true) {
+            OldObject *old_object;
+            old_object = olders_.Search(tx->starts_, tx->ends_);
+            if (old_object != nullptr) {
+                tx->starts_[TI(old_object->ti_and_ts_)] = \
+                    MAX(tx->starts_[TI(old_object->ti_and_ts_)], TS(old_object->ti_and_ts_));
+                tx->r_set_->Push(this, old_object->ti_and_ts_);
+                return old_object->object_;
+            }
         }
+        // std::cout << "thread_id: " << thread_id << std::endl;
+        // std::cout << "thread id: " << TI(curr_ti_and_ts_) << std::endl;
+        // std::cout << thread_timestamps[TI(curr_ti_and_ts_)] << std::endl;
+        // std::cout << TS(curr_ti_and_ts_) << std::endl;
+        // std::cout << tx->ends_[TI(curr_ti_and_ts_)] << std::endl;
+        thread_read_abort_counter++;
+        sth_ptm_abort(tx);
     }
     /*
      * OpenWithInit is used to init a new PtmObjectWrapper.
