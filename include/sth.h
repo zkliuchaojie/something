@@ -33,11 +33,18 @@
 #include <algorithm>
 #include <shared_mutex>
 
+// timestamp things
 #define TI_AND_TS(ti, ts)   (((unsigned long long)ti<<(sizeof(unsigned long long)*8-kThreadIdBitSize)) | (ts))
 #define TS(ti_and_ts)       ((ti_and_ts << kThreadIdBitSize) >> kThreadIdBitSize)
 #define TI(ti_and_ts)       (ti_and_ts >> (sizeof(unsigned long long)*8-kThreadIdBitSize))
 #define MAX(v1, v2)         (v1>v2 ? v1 : v2)
 #define MIN(v1, v2)         (v1>v2 ? v2 : v1)
+
+// transaction mode things
+#define MODE_MARK               (0x7)
+#define MODE(tx)                ((unsigned long long)tx & MODE_MARK)
+#define TX(tx_and_mode)         ((Transaction *)((unsigned long long)tx_and_mode & (~MODE_MARK)))
+#define TX_AND_MODE(tx, mode)   ((Transaction *)((unsigned long long)tx | mode))
 
 #define pr_info_and_exit(str) do { \
     std::cout << str << ", FILE: " << __FILE__ << \
@@ -65,8 +72,8 @@ enum TransactionStatus {
 };
 
 enum TransactionMode {
-    RDONLY = 0,
-    RDWR
+    RDONLY = 0x1,
+    RDWR   = 0x2,
 };
 
 enum OpenMode {
@@ -78,8 +85,7 @@ enum OpenMode {
 template <typename T>
 class PtmObjectWrapper;
 class Transaction;
-static Transaction *GetThreadTransaction();
-static void sth_ptm_abort(Transaction *tx);
+static void sth_ptm_abort();
 class RwSet;
 
 #define INF ((unsigned long long)(-1L))
@@ -88,7 +94,7 @@ volatile int thread_id_allocator = 0;
 volatile unsigned long long thread_timestamps[kMaxThreadNum]={0};
 
 // thread things
-thread_local Transaction *thread_tx = nullptr;
+thread_local Transaction *thread_tx_and_mode = nullptr;
 thread_local int thread_id = -1;
 thread_local unsigned long long thread_read_abort_counter = 0;
 thread_local unsigned long long thread_abort_counter = 0;
@@ -165,37 +171,29 @@ public:
 
 };
 
-// class alignas(kCacheLineSize) Transaction {
 class Transaction {
 public:
     /*
      * starts_ are used to record all threads' starting time,
      * which is similar to ends_.
      */
-    unsigned long long *starts_, *ends_;
-    unsigned long long objects_biggest_ts_;
+    unsigned long long starts_[kMaxThreadNum];
+    unsigned long long ends_[kMaxThreadNum];
     RwSet *r_set_;
     RwSet *w_set_;
+    unsigned long long objects_biggest_ts_;
     sigjmp_buf *env_;
     volatile TransactionStatus status_;
-    TransactionMode mode_;
 
 public:
     Transaction() {
         status_ = UNDETERMINED;
-        mode_ = RDWR;
-        starts_ = new unsigned long long[kMaxThreadNum];
-        ends_ = new unsigned long long[kMaxThreadNum];
         r_set_ = new RwSet();
         w_set_ = new RwSet();
         env_ = (sigjmp_buf *)malloc(sizeof(sigjmp_buf));
     }
  
     ~Transaction() {
-        if (starts_ != nullptr)
-            delete [] starts_;
-        if (ends_ != nullptr)
-            delete [] ends_;
         if (r_set_ != nullptr)
             delete r_set_;
         if (w_set_ != nullptr)
@@ -289,10 +287,6 @@ class alignas(kCacheLineSize) PtmObjectWrapper : public AbstractPtmObjectWrapper
 public:
     PtmObjectWrapper() {
         // I am not clear when generating a new PtmObject
-        Transaction *tx;
-        tx = GetThreadTransaction();
-        if(tx->status_ !=  ACTIVE)
-            pr_info_and_exit("there is no active transactions");
         curr_tx_status_ = nullptr;     // init with nullptr
         curr_ti_and_ts_ = 0;  // version num starts from 0
         new (&curr_) T();
@@ -301,17 +295,13 @@ public:
 
     AbstractPtmObject *Open(OpenMode mode) {
         //std::cout << "Open" << std::endl;
-        Transaction *tx;
-        tx = GetThreadTransaction();
-        if(tx->status_ !=  ACTIVE)
-            pr_info_and_exit("there is no active transactions");
         if(mode == READ) {
             //std::cout << "before OpenWithRead" << std::endl;
-            return OpenWithRead(tx);
+            return OpenWithRead();
         }
         else if (mode == WRITE) {
             //std::cout << "before OpenWithWrite" << std::endl;
-            return OpenWithWrite(tx);
+            return OpenWithWrite();
         }
         else if (mode == INIT)
             return OpenWithInit();
@@ -361,20 +351,19 @@ private:
      * you may can't find it, then the delete operation failed. So we
      * need users tell us whether it is a update transaction.
      */
-    AbstractPtmObject *OpenWithRead(Transaction *tx) {
+    AbstractPtmObject *OpenWithRead() {
         // std::cout << "OpenWithRead" << std::endl;
+        Transaction *tx = TX(thread_tx_and_mode);
         if ((curr_tx_status_ == nullptr || *curr_tx_status_ == COMMITTED) \
             && (TS(curr_ti_and_ts_) <= tx->ends_[TI(curr_ti_and_ts_)])) {
             tx->starts_[TI(curr_ti_and_ts_)] = \
                 MAX(tx->starts_[TI(curr_ti_and_ts_)], TS(curr_ti_and_ts_));
             tx->ends_[TI(curr_ti_and_ts_)] = \
                 MIN(tx->ends_[TI(curr_ti_and_ts_)], thread_timestamps[TI(curr_ti_and_ts_)]);
-            // this overhead is very large
-            // if (tx->r_set_->DoesContain(this) == true)
-            //     return &curr_;
-            tx->r_set_->Push(this, curr_ti_and_ts_);
+            if (MODE(thread_tx_and_mode) == RDWR)
+                tx->r_set_->Push(this, curr_ti_and_ts_);
             return &curr_;
-        } else if (tx->mode_ == RDONLY) {
+        } else if (MODE(thread_tx_and_mode) == RDONLY) {
             OldObject *old_object;
             old_object = olders_.Search(tx->starts_, tx->ends_);
             if (old_object != nullptr) {
@@ -389,9 +378,9 @@ private:
         // std::cout << thread_timestamps[TI(curr_ti_and_ts_)] << std::endl;
         // std::cout << TS(curr_ti_and_ts_) << std::endl;
         // std::cout << tx->ends_[TI(curr_ti_and_ts_)] << std::endl;
-        if (tx->mode_ == RDONLY)
+        if (MODE(thread_tx_and_mode) == RDONLY)
             thread_read_abort_counter++;
-        sth_ptm_abort(tx);
+        sth_ptm_abort();
     }
     /*
      * OpenWithInit is used to init a new PtmObjectWrapper.
@@ -403,11 +392,14 @@ private:
      * The return value won't be seen by other threads, so we
      * do not need to use Pretect/Unprotect in mm_pool.
      */
-    AbstractPtmObject *OpenWithWrite(Transaction *tx) {
+    AbstractPtmObject *OpenWithWrite() {
         // std::cout << "OpenWithWrite" << std::endl;
         if ((curr_tx_status_!=nullptr && *curr_tx_status_ != COMMITTED)) {
-            sth_ptm_abort(tx);
+            sth_ptm_abort();
         }
+        Transaction *tx = TX(thread_tx_and_mode);
+        // std::cout << TS(curr_ti_and_ts_) << std::endl;
+        // std::cout << tx->ends_[TI(curr_ti_and_ts_)] << std::endl;
         if (TS(curr_ti_and_ts_) <= tx->ends_[TI(curr_ti_and_ts_)]) {
             // check if we already put this object into write set
             if (tx->w_set_->DoesContain(this) == true)
@@ -428,7 +420,7 @@ private:
                 return new_;
             }
         }
-        sth_ptm_abort(tx);
+        sth_ptm_abort();
     }
 };
 
@@ -446,14 +438,21 @@ void InitTransaction(Transaction *tx) {
 static void sth_ptm_validate(Transaction *tx) {
     // std::cout << tx->does_use_olders_ << std::endl;
     if (tx->r_set_->Validate() == false) {
-        sth_ptm_abort(tx);
+        sth_ptm_abort();
     }
 }
 
-static jmp_buf *sth_ptm_start(TransactionMode tx_mode) {
+static jmp_buf *sth_ptm_start(TransactionMode mode) {
+    if (thread_id == -1) {
+        thread_id = ATOMIC_FETCH_ADD(&thread_id_allocator, 1);
+        // std::cout << "thread_id: " << thread_id << std::endl;
+    }
     Transaction *tx;
-    tx = GetThreadTransaction();
-    tx->mode_ = tx_mode;
+    if (thread_tx_and_mode == nullptr)
+        tx = new Transaction();
+    else
+        tx = TX(thread_tx_and_mode);
+    thread_tx_and_mode = TX_AND_MODE(tx, mode);
     InitTransaction(tx);
     //std::cout << "start ptm" << std::endl;
     return tx->env_;
@@ -463,11 +462,8 @@ static jmp_buf *sth_ptm_start(TransactionMode tx_mode) {
  * do not consider durability yet.
  */
 static void sth_ptm_commit() {
-    Transaction *tx;
-    tx = GetThreadTransaction();
-    if (tx->status_ != ACTIVE)
-        pr_info_and_exit("there is no active transactions");
-    if (tx->mode_ == RDWR) {
+    Transaction *tx = TX(thread_tx_and_mode);
+    if (MODE(thread_tx_and_mode) == RDWR) {
         sth_ptm_validate(tx);
         unsigned long long commit_ts = thread_timestamps[thread_id];
         if (tx->objects_biggest_ts_ >= commit_ts)
@@ -484,23 +480,13 @@ static void sth_ptm_commit() {
     }
 }
 
-static void sth_ptm_abort(Transaction *tx) {
+static void sth_ptm_abort() {
+    Transaction *tx = TX(thread_tx_and_mode);
     tx->w_set_->FreeNew();
     tx->w_set_->Unlock();
     InitTransaction(tx);
     thread_abort_counter++;
     siglongjmp(*(tx->env_), 1);
-}
-
-static Transaction *GetThreadTransaction() {
-    if (thread_id == -1) {
-        thread_id = ATOMIC_FETCH_ADD(&thread_id_allocator, 1);
-        // std::cout << "thread_id: " << thread_id << std::endl;
-    }
-    if (thread_tx == nullptr) {
-        thread_tx = new Transaction();
-    }
-    return thread_tx;
 }
 
 #endif
