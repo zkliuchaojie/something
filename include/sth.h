@@ -31,6 +31,7 @@
 #include <mutex>
 #include <cstring>
 #include <algorithm>
+#include <shared_mutex>
 
 #define TI_AND_TS(ti, ts)   (((unsigned long long)ti<<(sizeof(unsigned long long)*8-kThreadIdBitSize)) | (ts))
 #define TS(ti_and_ts)       ((ti_and_ts << kThreadIdBitSize) >> kThreadIdBitSize)
@@ -44,8 +45,8 @@
     exit(-1); \
 }while(0);
 
-#define PTM_START do { \
-    sigjmp_buf *_e = sth_ptm_start(); \
+#define PTM_START(tx_mode) do { \
+    sigjmp_buf *_e = sth_ptm_start(tx_mode); \
     if (_e != NULL) { \
         /* save the current signal mask */ \
         sigsetjmp(*_e, 1); \
@@ -61,6 +62,11 @@ enum TransactionStatus {
     COMMITTED, 
     ABORTED,
     UNDETERMINED,
+};
+
+enum TransactionMode {
+    RDONLY = 0,
+    RDWR
 };
 
 enum OpenMode {
@@ -172,12 +178,12 @@ public:
     RwSet *w_set_;
     sigjmp_buf *env_;
     volatile TransactionStatus status_;
-    bool is_readonly_;
+    TransactionMode mode_;
 
 public:
     Transaction() {
         status_ = UNDETERMINED;
-        is_readonly_ = true;
+        mode_ = RDWR;
         starts_ = new unsigned long long[kMaxThreadNum];
         ends_ = new unsigned long long[kMaxThreadNum];
         r_set_ = new RwSet();
@@ -233,6 +239,11 @@ public:
             free(old_objects_);
     }
     void Insert(unsigned long long ti_and_ts, AbstractPtmObject *curr) {
+        shared_mutex_.lock();
+        /*
+         * be carefull, other threads may use the old object that
+         * we will overwrite, so we need reference count to check it.
+         */
         if (old_objects_[pos_].object_ != nullptr) {
             old_objects_[pos_].object_->Copy(curr);
         } else {
@@ -240,26 +251,34 @@ public:
         }
         old_objects_[pos_].ti_and_ts_ = ti_and_ts;
         pos_ = (pos_ + 1) % kSize_;
+        shared_mutex_.unlock();
     }
     OldObject *Search(unsigned long long *starts_, unsigned long long *ends_) {
+        shared_mutex_.lock_shared();
         OldObject *old_object;
         for (int i=0; i<kSize_; i++) {
             old_object = &old_objects_[(pos_+i)%kSize_];
-            if (old_object->object_ == nullptr)
+            if (old_object->object_ == nullptr) {
+                shared_mutex_.unlock_shared();
                 return nullptr;
+            }
             if (TS(old_object->ti_and_ts_) <= ends_[TI(old_object->ti_and_ts_)]) {
+                shared_mutex_.unlock_shared();
                 return old_object;
             } else {
+                // we should minus 1
                 ends_[TI(old_object->ti_and_ts_)] = \
-                    MIN(ends_[TI(old_object->ti_and_ts_)], TS(old_object->ti_and_ts_));
+                    MIN(ends_[TI(old_object->ti_and_ts_)], TS(old_object->ti_and_ts_)-1);
             }
         }
+        shared_mutex_.unlock_shared();
         return nullptr;
     }
 private:
     const int kSize_;
     int pos_;   // pointing to a position that we can insert
     OldObject *old_objects_;
+    std::shared_mutex shared_mutex_;
 };
 
 /*
@@ -325,7 +344,7 @@ public:
     }
 
 private:
-    TransactionStatus *curr_tx_status_;
+    volatile TransactionStatus *curr_tx_status_;
     // ti means thread id, ts means timestamp
     unsigned long long curr_ti_and_ts_;    // version_num_ can be a timestamp.
     T curr_;
@@ -334,11 +353,16 @@ private:
     // for now, this is not used, we just implement one-version.
     Olders olders_;
 
+    /*
+     * when OpenWithRead, it may be a Update Tx, but we don't know
+     * until OpenWithWrite. So we will use old objects, and there is
+     * a bug. For example, for a linkedlist, when deleting an object,
+     * you search it first. In this process, if you use old objects,
+     * you may can't find it, then the delete operation failed. So we
+     * need users tell us whether it is a update transaction.
+     */
     AbstractPtmObject *OpenWithRead(Transaction *tx) {
         // std::cout << "OpenWithRead" << std::endl;
-        if (curr_tx_status_ != nullptr && *curr_tx_status_ != COMMITTED)
-            sth_ptm_abort(tx);
-
         if ((curr_tx_status_ == nullptr || *curr_tx_status_ == COMMITTED) \
             && (TS(curr_ti_and_ts_) <= tx->ends_[TI(curr_ti_and_ts_)])) {
             tx->starts_[TI(curr_ti_and_ts_)] = \
@@ -350,7 +374,7 @@ private:
             //     return &curr_;
             tx->r_set_->Push(this, curr_ti_and_ts_);
             return &curr_;
-        } else if (tx->is_readonly_ == true) {
+        } else if (tx->mode_ == RDONLY) {
             OldObject *old_object;
             old_object = olders_.Search(tx->starts_, tx->ends_);
             if (old_object != nullptr) {
@@ -365,7 +389,8 @@ private:
         // std::cout << thread_timestamps[TI(curr_ti_and_ts_)] << std::endl;
         // std::cout << TS(curr_ti_and_ts_) << std::endl;
         // std::cout << tx->ends_[TI(curr_ti_and_ts_)] << std::endl;
-        thread_read_abort_counter++;
+        if (tx->mode_ == RDONLY)
+            thread_read_abort_counter++;
         sth_ptm_abort(tx);
     }
     /*
@@ -379,12 +404,11 @@ private:
      * do not need to use Pretect/Unprotect in mm_pool.
      */
     AbstractPtmObject *OpenWithWrite(Transaction *tx) {
-        //std::cout << "OpenWithWrite" << std::endl;
-        if (curr_tx_status_!=nullptr && *curr_tx_status_ != COMMITTED)
+        // std::cout << "OpenWithWrite" << std::endl;
+        if ((curr_tx_status_!=nullptr && *curr_tx_status_ != COMMITTED)) {
             sth_ptm_abort(tx);
+        }
         if (TS(curr_ti_and_ts_) <= tx->ends_[TI(curr_ti_and_ts_)]) {
-            if(tx->is_readonly_ == true)
-                tx->is_readonly_ = false;
             // check if we already put this object into write set
             if (tx->w_set_->DoesContain(this) == true)
                 return new_;
@@ -402,12 +426,9 @@ private:
                 if (new_ == nullptr)
                     new_ = curr_.Clone();
                 return new_;
-            }else {
-                sth_ptm_abort(tx);
             }
-        }else {
-            sth_ptm_abort(tx);
         }
+        sth_ptm_abort(tx);
     }
 };
 
@@ -418,20 +439,21 @@ void InitTransaction(Transaction *tx) {
     }
     tx->objects_biggest_ts_ = 0;
     tx->status_ = ACTIVE;
-    tx->is_readonly_ = true;
     tx->r_set_->Clear();
     tx->w_set_->Clear();
 }
 
 static void sth_ptm_validate(Transaction *tx) {
+    // std::cout << tx->does_use_olders_ << std::endl;
     if (tx->r_set_->Validate() == false) {
         sth_ptm_abort(tx);
     }
 }
 
-static jmp_buf *sth_ptm_start() {
+static jmp_buf *sth_ptm_start(TransactionMode tx_mode) {
     Transaction *tx;
     tx = GetThreadTransaction();
+    tx->mode_ = tx_mode;
     InitTransaction(tx);
     //std::cout << "start ptm" << std::endl;
     return tx->env_;
@@ -445,7 +467,7 @@ static void sth_ptm_commit() {
     tx = GetThreadTransaction();
     if (tx->status_ != ACTIVE)
         pr_info_and_exit("there is no active transactions");
-    if (tx->is_readonly_ == false) {
+    if (tx->mode_ == RDWR) {
         sth_ptm_validate(tx);
         unsigned long long commit_ts = thread_timestamps[thread_id];
         if (tx->objects_biggest_ts_ >= commit_ts)

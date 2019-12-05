@@ -67,7 +67,7 @@ public:
 
 public:
     LinkedList() {
-        PTM_START;
+        PTM_START(RDWR);
         sentinel_ = new PtmObjectWrapper<PONode>();
         PONode *po_node = (PONode *)sentinel_->Open(INIT);
         po_node->next_ = sentinel_;
@@ -85,7 +85,7 @@ public:
 };
 
 bool LinkedList::Search(Value_t val) {
-    PTM_START;
+    PTM_START(RDONLY);
     bool retval = false;
     PONode *po_node = (PONode *)sentinel_->Open(READ);
     // skip the sentinel
@@ -104,7 +104,7 @@ bool LinkedList::Search(Value_t val) {
 }
 
 void LinkedList::Insert(Value_t val) {
-    PTM_START;
+    PTM_START(RDWR);
     //std::cout <<"insert: " << val << std::endl;
     PtmObjectWrapper<PONode> *prev = sentinel_;
     PONode *po_node = (PONode *)sentinel_->Open(READ);
@@ -127,7 +127,7 @@ void LinkedList::Insert(Value_t val) {
 }
 
 bool LinkedList::Delete(Value_t val) {
-    PTM_START;
+    PTM_START(RDWR);
     PONode *tmp;
     bool retval = true;
     PtmObjectWrapper<PONode> *prev = sentinel_;
@@ -155,7 +155,7 @@ bool LinkedList::Delete(Value_t val) {
 }
 
 unsigned long long LinkedList::Size() {
-    PTM_START;
+    PTM_START(RDONLY);
     unsigned long long retval = 0;
     // skip the sentinel
     PtmObjectWrapper<PONode> *po_node_wrapper = ((PONode *)sentinel_->Open(READ))->next_;
