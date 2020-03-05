@@ -174,10 +174,9 @@ public:
 class Transaction {
 public:
     /*
-     * starts_ are used to record all threads' starting time,
-     * which is similar to ends_.
+     * ends_ are used to record all threads' current time, and all
+     * objects' commit time should be less or equal it.
      */
-    unsigned long long starts_[kMaxThreadNum];
     unsigned long long ends_[kMaxThreadNum];
     RwSet *r_set_;
     RwSet *w_set_;
@@ -251,11 +250,11 @@ public:
         pos_ = (pos_ + 1) % kSize_;
         shared_mutex_.unlock();
     }
-    OldObject *Search(unsigned long long *starts_, unsigned long long *ends_) {
+    OldObject *Search(unsigned long long *ends_) {
         shared_mutex_.lock_shared();
         OldObject *old_object;
-        for (int i=0; i<kSize_; i++) {
-            old_object = &old_objects_[(pos_+i)%kSize_];
+        for (int i=1; i<=kSize_; i++) {
+            old_object = &old_objects_[(kSize_+pos_-i)%kSize_];
             if (old_object->object_ == nullptr) {
                 shared_mutex_.unlock_shared();
                 return nullptr;
@@ -263,10 +262,6 @@ public:
             if (TS(old_object->ti_and_ts_) <= ends_[TI(old_object->ti_and_ts_)]) {
                 shared_mutex_.unlock_shared();
                 return old_object;
-            } else {
-                // we should minus 1
-                ends_[TI(old_object->ti_and_ts_)] = \
-                    MIN(ends_[TI(old_object->ti_and_ts_)], TS(old_object->ti_and_ts_)-1);
             }
         }
         shared_mutex_.unlock_shared();
@@ -354,30 +349,20 @@ private:
     AbstractPtmObject *OpenWithRead() {
         // std::cout << "OpenWithRead" << std::endl;
         Transaction *tx = TX(thread_tx_and_mode);
+        // curr_ti_and_ts_ may be modified by other tx, so we should check it before return.
+        unsigned long long curr_ti_and_ts = curr_ti_and_ts_;
         if ((curr_tx_status_ == nullptr || *curr_tx_status_ == COMMITTED) \
-            && (TS(curr_ti_and_ts_) <= tx->ends_[TI(curr_ti_and_ts_)])) {
-            tx->starts_[TI(curr_ti_and_ts_)] = \
-                MAX(tx->starts_[TI(curr_ti_and_ts_)], TS(curr_ti_and_ts_));
-            tx->ends_[TI(curr_ti_and_ts_)] = \
-                MIN(tx->ends_[TI(curr_ti_and_ts_)], thread_timestamps[TI(curr_ti_and_ts_)]);
-            if (MODE(thread_tx_and_mode) == RDWR)
-                tx->r_set_->Push(this, curr_ti_and_ts_);
+            && (TS(curr_ti_and_ts) <= tx->ends_[TI(curr_ti_and_ts)])) {
+            tx->r_set_->Push(this, curr_ti_and_ts);
             return &curr_;
         } else if (MODE(thread_tx_and_mode) == RDONLY) {
             OldObject *old_object;
-            old_object = olders_.Search(tx->starts_, tx->ends_);
+            old_object = olders_.Search(tx->ends_);
             if (old_object != nullptr) {
-                tx->starts_[TI(old_object->ti_and_ts_)] = \
-                    MAX(tx->starts_[TI(old_object->ti_and_ts_)], TS(old_object->ti_and_ts_));
                 tx->r_set_->Push(this, old_object->ti_and_ts_);
                 return old_object->object_;
             }
         }
-        // std::cout << "thread_id: " << thread_id << std::endl;
-        // std::cout << "thread id: " << TI(curr_ti_and_ts_) << std::endl;
-        // std::cout << thread_timestamps[TI(curr_ti_and_ts_)] << std::endl;
-        // std::cout << TS(curr_ti_and_ts_) << std::endl;
-        // std::cout << tx->ends_[TI(curr_ti_and_ts_)] << std::endl;
         if (MODE(thread_tx_and_mode) == RDONLY)
             thread_read_abort_counter++;
         sth_ptm_abort();
@@ -398,23 +383,16 @@ private:
             sth_ptm_abort();
         }
         Transaction *tx = TX(thread_tx_and_mode);
-        // std::cout << TS(curr_ti_and_ts_) << std::endl;
-        // std::cout << tx->ends_[TI(curr_ti_and_ts_)] << std::endl;
-        if (TS(curr_ti_and_ts_) <= tx->ends_[TI(curr_ti_and_ts_)]) {
+        unsigned long long curr_ti_and_ts = curr_ti_and_ts_;
+        if ((curr_tx_status_ == nullptr || *curr_tx_status_ == COMMITTED) \
+            && (TS(curr_ti_and_ts) <= tx->ends_[TI(curr_ti_and_ts)])) {
             // check if we already put this object into write set
             if (tx->w_set_->DoesContain(this) == true)
                 return new_;
-            //std::cout << "before try lock" << std::endl;
+            // std::cout << "before try lock" << std::endl;
             if(mutex_.try_lock() == true) {
-                // update tx.starts_ and tx.ends_
-                tx->starts_[TI(curr_ti_and_ts_)] = \
-                    MAX(tx->starts_[TI(curr_ti_and_ts_)], TS(curr_ti_and_ts_));
-                tx->ends_[TI(curr_ti_and_ts_)] = \
-                    MIN(tx->ends_[TI(curr_ti_and_ts_)], thread_timestamps[TI(curr_ti_and_ts_)]);
                 // there exists an concurrent bug
-                tx->w_set_->Push(this, curr_ti_and_ts_);
-                if (TS(curr_ti_and_ts_) > tx->objects_biggest_ts_)
-                    tx->objects_biggest_ts_ = TS(curr_ti_and_ts_);
+                tx->w_set_->Push(this, curr_ti_and_ts);
                 if (new_ == nullptr)
                     new_ = curr_.Clone();
                 return new_;
@@ -425,10 +403,8 @@ private:
 };
 
 void InitTransaction(Transaction *tx) {
-    for (int i=0; i<kMaxThreadNum; i++) {
-        tx->starts_[i] = thread_timestamps[i];
+    for (int i=0; i<kMaxThreadNum; i++)
         tx->ends_[i] = INF;
-    }
     tx->objects_biggest_ts_ = 0;
     tx->status_ = ACTIVE;
     tx->r_set_->Clear();
@@ -463,8 +439,8 @@ static jmp_buf *sth_ptm_start(TransactionMode mode) {
  */
 static void sth_ptm_commit() {
     Transaction *tx = TX(thread_tx_and_mode);
+    sth_ptm_validate(tx);
     if (MODE(thread_tx_and_mode) == RDWR) {
-        sth_ptm_validate(tx);
         unsigned long long commit_ts = thread_timestamps[thread_id];
         if (tx->objects_biggest_ts_ >= commit_ts)
             commit_ts = tx->objects_biggest_ts_ + 1;
