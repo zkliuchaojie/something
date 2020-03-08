@@ -1,21 +1,22 @@
+
 #include <iostream>
+#include <csetjmp>
 
-class A {
+using namespace std;
+
+class Rainbow{
 public:
-    virtual void Print() = 0;
+	Rainbow(){
+		cout << "Rainbow()" << endl;
+	}
+	~Rainbow(){
+		cout << "~Rainbow()" << endl;
+	}
 };
 
-template <typename T>
-class B : public A {
-public:
-    T t;
-    void Print() {
-        std::cout << t << std::endl;
-    }
-};
-
-int main() {
-    B<int> b;
-    b.Print();
-    return 0;
+int main(){
+retry:
+	Rainbow rb;
+	goto retry;
+	system("pause");
 }
