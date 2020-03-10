@@ -1,6 +1,8 @@
 #ifndef STH_CONST_H_
 #define STH_CONST_H_
 
+#include <climits>
+
 const int kMaxThreadNum = 16;
 // so the max kkMaxThreadNum is 256, but now we use 64
 const int kThreadIdBitSize = 8;

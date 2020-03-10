@@ -249,12 +249,8 @@ static size_t
   xxhash
 };
 
-inline size_t h1(const void* key, size_t len, size_t seed=0xc70697UL) {
+inline size_t h(const void* key, size_t len, size_t seed=0xc70697UL) {
   return hash_funcs[0](key, len, seed);
 }
 
-inline size_t h2(const void* key, size_t len, size_t seed=0xc70697UL) {
-  return hash_funcs[1](key, len, seed);
-}
-
-#endif  // HASH_H_
+#endif  // UTIL_HASH_H_
