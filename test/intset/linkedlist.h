@@ -41,19 +41,6 @@ public:
         val_ = po_node->val_;
         next_ = po_node->next_;
     }
-    void Free() {
-// #ifdef USE_MM
-//         ((Pool<PONode> *)__mm_pool_)->Free(this);
-// #else
-//         ;
-// #endif
-    }
-    static void Destroy(void *object) {
-        // MMAbstractObject *object_to_free = (MMAbstractObject *)object;
-        // object_to_free->__next_=object_to_free->__owner_partition_->free_list_;
-        // object_to_free->__owner_partition_->free_list_ = object_to_free;
-        // object_to_free->__owner_partition_->allocated_num_--;
-    }
 };
 
 class LinkedList : public AbstractIntset {
@@ -68,7 +55,7 @@ public:
     LinkedList() {
         PTM_START(RDWR);
         sentinel_ = new PtmObjectWrapper<PONode>();
-        PONode *po_node = (PONode *)sentinel_->Open(INIT);
+        PONode *po_node = sentinel_->Open(INIT);
         po_node->next_ = sentinel_;
         PTM_COMMIT;
     };
@@ -86,16 +73,16 @@ public:
 bool LinkedList::Search(Value_t val) {
     bool retval = false;
     PTM_START(RDONLY);
-    UniqueReader<PONode> reader(sentinel_->OpenWithRead());
+    PONode *node = sentinel_->Open(READ);
     // skip the sentinel
-    PtmObjectWrapper<PONode> *po_node_wrapper = reader.GetObject()->next_;
+    PtmObjectWrapper<PONode> *po_node_wrapper = node->next_;
     while(po_node_wrapper != sentinel_) {
-        UniqueReader<PONode> reader(po_node_wrapper->OpenWithRead());
-        if(reader.GetObject()->val_ == val) {
+        PONode *node = po_node_wrapper->Open(READ);
+        if(node->val_ == val) {
             retval = true;
             break;
         }else {
-            po_node_wrapper = reader.GetObject()->next_;
+            po_node_wrapper = node->next_;
         }
     }
     PTM_COMMIT;
@@ -106,20 +93,20 @@ void LinkedList::Insert(Value_t val) {
     PTM_START(RDWR);
     // std::cout <<"insert: " << val << std::endl;
     PtmObjectWrapper<PONode> *prev = sentinel_;
-    UniqueReader<PONode> reader(sentinel_->OpenWithRead());
-    PtmObjectWrapper<PONode> *curr = reader.GetObject()->next_;
-    reader = curr->OpenWithRead();
-    while(curr != sentinel_ && val > reader.GetObject()->val_) {
+    PONode *node = sentinel_->Open(READ);
+    PtmObjectWrapper<PONode> *curr = node->next_;
+    node = curr->Open(READ);
+    while(curr != sentinel_ && val > node->val_) {
         // std::cout << "insert" << std::endl;
         prev = curr;
-        curr = reader.GetObject()->next_;
-        reader = curr->OpenWithRead();
+        curr = node->next_;
+        node = curr->Open(READ);
     }
     PONode *po_node = nullptr;
     curr->Open(WRITE);
-    po_node = (PONode *)prev->Open(WRITE);
+    po_node = prev->Open(WRITE);
     PtmObjectWrapper<PONode> *new_po_node_wrapper = new PtmObjectWrapper<PONode>();
-    PONode *new_po_node = (PONode *)new_po_node_wrapper->Open(INIT);
+    PONode *new_po_node = new_po_node_wrapper->Open(INIT);
     new_po_node->val_ = val;
     new_po_node->next_ = curr;
     po_node->next_ = new_po_node_wrapper;
@@ -132,21 +119,21 @@ bool LinkedList::Delete(Value_t val) {
     // std::cout <<"delete: " << val << std::endl;
     PONode *tmp;
     PtmObjectWrapper<PONode> *prev = sentinel_;
-    UniqueReader<PONode> reader(sentinel_->OpenWithRead());
-    PtmObjectWrapper<PONode> *curr = reader.GetObject()->next_;
-    reader = curr->OpenWithRead();
-    while(curr != sentinel_ && val > reader.GetObject()->val_) {
+    PONode *node = sentinel_->Open(READ);
+    PtmObjectWrapper<PONode> *curr = node->next_;
+    node = curr->Open(READ);
+    while(curr != sentinel_ && val > node->val_) {
         // std::cout << "delete" << std::endl;
         prev = curr;
-        curr = reader.GetObject()->next_;
-        reader = curr->OpenWithRead();
+        curr = node->next_;
+        node = curr->Open(READ);
     }
-    if(val == reader.GetObject()->val_) {
+    if(val == node->val_) {
         // NOTE: we do not consider releasing the deleted node.
         curr->Open(WRITE);
-        reader.GetObject()->next_->Open(WRITE);
-        tmp = (PONode *)prev->Open(WRITE);
-        tmp->next_ = reader.GetObject()->next_;
+        node->next_->Open(WRITE);
+        tmp = prev->Open(WRITE);
+        tmp->next_ = node->next_;
         retval = true;
     }else {
         retval = false;
@@ -158,12 +145,12 @@ bool LinkedList::Delete(Value_t val) {
 unsigned long long LinkedList::Size() {
     unsigned long long retval = 0;
     PTM_START(RDONLY);
-    UniqueReader<PONode> reader(sentinel_->OpenWithRead());
-    PtmObjectWrapper<PONode> *curr = reader.GetObject()->next_;
+    PONode *node = sentinel_->Open(READ);
+    PtmObjectWrapper<PONode> *curr = node->next_;
     while(curr != sentinel_) {
         retval++;
-        reader = curr->OpenWithRead();
-        curr = reader.GetObject()->next_;
+        node = curr->Open(READ);
+        curr = node->next_;
     }
     PTM_COMMIT;
     return retval;

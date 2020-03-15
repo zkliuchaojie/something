@@ -318,13 +318,13 @@ int main(int argc, char **argv)
   barrier_t barrier;
   struct timeval start, end;
   struct timespec timeout;
-  int duration = DEFAULT_DURATION;
-  int initial = DEFAULT_INITIAL;
-  int nb_threads = DEFAULT_NB_THREADS;
-  int range = DEFAULT_RANGE;
-  int seed = DEFAULT_SEED;
-  int update = DEFAULT_UPDATE;
-  int alternate = 1;
+  unsigned long duration = DEFAULT_DURATION;
+  unsigned long initial = DEFAULT_INITIAL;
+  unsigned long nb_threads = DEFAULT_NB_THREADS;
+  unsigned long range = DEFAULT_RANGE;
+  unsigned long seed = DEFAULT_SEED;
+  unsigned long update = DEFAULT_UPDATE;
+  unsigned alternate = 1;
 #ifndef TM_COMPILER
   char *cm = NULL;
 #endif /* ! TM_COMPILER */

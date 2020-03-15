@@ -10,7 +10,7 @@ const unsigned long long kRwSetDefaultSize = 4096;
 const int kCacheLineSize = 64;
 const int kMaxThreadCounter = 16;
 const int kBloomFilterSize = 64;
-const int kVersionSize = 2;
+const int kVersionSize = 3;
 const unsigned long long kInvalidTiAndTs = ULLONG_MAX;
 
 #endif

@@ -6,7 +6,7 @@
 
 inline size_t standard(const void* _ptr, size_t _len,
     size_t _seed=static_cast<size_t>(0xc70f6907UL)){
-  return std::_Hash_bytes(_ptr, _len, _seed);
+    return std::_Hash_bytes(_ptr, _len, _seed);
 }
 
 // JENKINS HASH FUNCTION

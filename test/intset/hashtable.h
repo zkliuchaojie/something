@@ -41,18 +41,22 @@ public:
         val_ = entry->val_;
         next_ = entry->next_;
     }
-    void Free() {};
 };
+
+/* 
+ * test with the following command:
+ * ./intset-ht -i 100000 -r 1000000 -u 0 -n 1 
+ */
 
 class HashTable {
 public:
     HashTable() {
-        capacity_ = 100000;     // 10k
+        capacity_ = 10000;     // 10k
         dict_ = new PtmObjectWrapper<Entry>*[capacity_];
         PTM_START(RDWR);
         for(int i=0; i<capacity_; i++) {
             PtmObjectWrapper<Entry> *tmp = new PtmObjectWrapper<Entry>();
-            Entry *entry = (Entry *)tmp->Open(INIT);
+            Entry *entry = tmp->Open(INIT);
             entry->key_ = INVALID;
             entry->next_ = nullptr;
             dict_[i] = tmp;
@@ -81,12 +85,12 @@ Value_t HashTable::Get(Key_t key) {
     auto loc = key_hash % capacity_;
     PtmObjectWrapper<Entry> *curr = dict_[loc];
     while (curr != nullptr) {
-        UniqueReader<Entry> reader(curr->OpenWithRead());
-        if(reader.GetObject()->key_ == key) {
+        Entry *entry = curr->Open(READ);
+        if(entry->key_ == key) {
             retval = 1;
             break;
         }else {
-            curr = reader.GetObject()->next_;
+            curr = entry->next_;
         }
     }
     PTM_COMMIT;
@@ -98,15 +102,16 @@ void HashTable::Insert(Key_t key, Value_t val) {
     // std::cout << "insert" << std::endl;
     auto key_hash = h(&key, sizeof(key));
     auto loc = key_hash % capacity_;
+    // std::cout << loc << std::endl;
     PtmObjectWrapper<Entry> *curr = dict_[loc];
-    Entry *entry = (Entry *)curr->Open(WRITE);
+    Entry *entry = curr->Open(WRITE);
     if (entry->key_ == INVALID) {
         entry->key_ = key;
         entry->val_ = val;
     }else {
         // we need alloc a new entry
         PtmObjectWrapper<Entry> *new_entry_wrapper = new PtmObjectWrapper<Entry>();
-        Entry *new_entry = (Entry *)new_entry_wrapper->Open(INIT);
+        Entry *new_entry = new_entry_wrapper->Open(INIT);
         new_entry->key_ = key;
         new_entry->val_ = val;
         new_entry->next_ = entry->next_;
@@ -123,7 +128,7 @@ bool HashTable::Delete(Key_t key) {
     auto key_hash = h(&key, sizeof(key));
     auto loc = key_hash % capacity_;
     PtmObjectWrapper<Entry> *curr = dict_[loc];
-    Entry *entry = (Entry *)curr->Open(WRITE);
+    Entry *entry = curr->Open(WRITE);
     if (entry->key_ == key) { 
         entry->key_ = INVALID;
         ret = true;
@@ -132,9 +137,9 @@ bool HashTable::Delete(Key_t key) {
         PtmObjectWrapper<Entry> *prev = curr;
         curr = entry->next_;
         while (curr != nullptr) {
-            Entry *entry = (Entry *)curr->Open(WRITE);
+            Entry *entry = curr->Open(WRITE);
             if(entry->key_ == key) {
-                Entry *prev_entry = (Entry *)prev->Open(WRITE);
+                Entry *prev_entry = prev->Open(WRITE);
                 prev_entry->next_ = entry->next_;
                 ret = true;
                 break;
@@ -155,10 +160,10 @@ unsigned long long HashTable::Size() {
     for(int i=0; i<capacity_; i++) {
         PtmObjectWrapper<Entry> *curr = dict_[i];
         while(curr != nullptr) {
-            UniqueReader<Entry> reader(curr->OpenWithRead());
-            if (reader.GetObject()->key_ != INVALID)
+            Entry *entry = curr->Open(READ);
+            if (entry->key_ != INVALID)
                 ret++;
-            curr = reader.GetObject()->next_;
+            curr = entry->next_;
         }
     }
     PTM_COMMIT;
