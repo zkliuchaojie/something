@@ -46,6 +46,11 @@
 #define TX(tx_and_mode)         ((Transaction *)((unsigned long long)tx_and_mode & (~MODE_MARK)))
 #define TX_AND_MODE(tx, mode)   ((Transaction *)((unsigned long long)tx | mode))
 
+// transaction ends_ things
+#define IS_USED(tx)             ((tx>>(63))&0x1)
+#define SET_USED(tx)            (tx|((unsigned long long)0x1<<(63)))
+#define CLEAR_USED(tx)          (tx&((unsigned long long)0x7fffffffffffffff))
+
 #define pr_info_and_exit(str) do { \
     std::cout << str << ", FILE: " << __FILE__ << \
         ", LINE: " << __LINE__ << std::endl; \
@@ -105,7 +110,8 @@ class RwSet;
 #define INF ((unsigned long long)(-1L))
 // global things
 volatile int thread_id_allocator = 0;
-volatile unsigned long long thread_timestamps[kMaxThreadNum]; // default 1
+// unsigned long long thread_timestamps[kMaxThreadNum][8]; // default 1
+// thread_local unsigned long long thread_clock = 1;
 volatile unsigned long long thread_epoch_min[kMaxThreadNum];  // defualt 0
 // thread_epoch [i][kMaxThreadNum] records all clocks that thread i is using.
 volatile unsigned long long thread_epoch[kMaxThreadNum][kMaxThreadNum]; // default INF
@@ -136,11 +142,6 @@ public:
     virtual void IncPos() = 0;
     virtual void Unlock() = 0;
     virtual ~AbstractPtmObjectWrapper() {};
-};
-
-struct PtmObjectAndSharedMutex {
-    AbstractPtmObject *object_;
-    std::shared_mutex *shared_mutex_;
 };
 
 struct PtmObjectWrapperWithVersionNum {
@@ -220,6 +221,7 @@ public:
      * ends_ are used to record all threads' current time, and all
      * objects' commit time should be less or equal it.
      */
+    unsigned long long thread_clock;
     unsigned long long ends_[kMaxThreadNum];
     RwSet *r_set_;
     RwSet *w_set_;
@@ -228,6 +230,8 @@ public:
 
 public:
     Transaction() {
+        thread_clock = 1;
+        memset(ends_, 0, sizeof(sizeof(unsigned long long)*kMaxThreadNum));
         status_ = UNDETERMINED;
         r_set_ = new RwSet();
         w_set_ = new RwSet();
@@ -256,6 +260,7 @@ public:
             objs_[i].ti_and_ts_ = kInvalidTiAndTs;
         pos_ = 0;
         new_ = nullptr;
+        lock_ = 0;
     }
 
     T *Open(OpenMode mode) {
@@ -328,18 +333,20 @@ public:
         pos_ = (pos_+1)%kVersionSize;
     }
     void Unlock() {
-        mutex_.unlock();
+        // mutex_.unlock();
+        int tmp = 1;
+        CAS(&lock_, &tmp, 0);
     }
 private:
     // pos_ is a index, that points the empty space that is used to store the latest version.
     volatile int pos_;
+    T *new_;
+    int lock_;
     struct OldObject {
         volatile unsigned long long ti_and_ts_;
         T object_;
     } objs_[kVersionSize];
-    T *new_;
-    std::mutex mutex_;
-
+    // std::mutex mutex_;
     /*
      * OpenWithInit is used to init a new PtmObjectWrapper.
      * Be sure that when initializing, no one can access it.
@@ -359,16 +366,22 @@ private:
     T* OpenWithRead() {
         // std::cout << "OpenWithRead, " << thread_id << std::endl;
         Transaction *tx = TX(thread_tx_and_mode);
+retry:
         // pos_ maybe modifed by other tx, so we first get it, and if it is changed,
         // in OpenWithRead, which won't cause unconsitency. 
         int curr_pos = (kVersionSize+pos_-1)%kVersionSize;
         unsigned long long curr_ti_and_ts = objs_[curr_pos].ti_and_ts_; 
+        unsigned long long latest_ti_and_ts = curr_ti_and_ts;
         // if ((curr_tx_status_ == nullptr || *curr_tx_status_ == COMMITTED) \
         //     && (TS(curr_ti_and_ts) <= tx->ends_[TI(curr_ti_and_ts)])) {
         if ((TS(curr_ti_and_ts) <= tx->ends_[TI(curr_ti_and_ts)])) { 
             // printf("%p\n", &objs_[curr_pos].shared_mutex_);
             if(MODE(thread_tx_and_mode) == RDWR)
                 tx->r_set_->Push(this, curr_pos, curr_ti_and_ts);
+            if(!(IS_USED(tx->ends_[TI(curr_ti_and_ts)]))) {
+                tx->ends_[TI(curr_ti_and_ts)] = SET_USED(tx->ends_[TI(curr_ti_and_ts)]);
+                thread_epoch[thread_id][TI(curr_ti_and_ts)] = tx->ends_[TI(curr_ti_and_ts)];
+            }
             return &(objs_[curr_pos].object_);
         } else if (MODE(thread_tx_and_mode) == RDONLY) {
             for(int i=1; i<kVersionSize; i++) {
@@ -378,9 +391,17 @@ private:
                     break;
                 if(TS(curr_ti_and_ts) <= tx->ends_[TI(curr_ti_and_ts)]) {
                     // if return false, which means no candidates can be used.
+                    if(!(IS_USED(tx->ends_[TI(curr_ti_and_ts)]))) {
+                        tx->ends_[TI(curr_ti_and_ts)] = SET_USED(tx->ends_[TI(curr_ti_and_ts)]);
+                        thread_epoch[thread_id][TI(curr_ti_and_ts)] = tx->ends_[TI(curr_ti_and_ts)];
+                    }
                     return &(objs_[curr_pos].object_);
                 }
             }
+        }
+        if(!(IS_USED(tx->ends_[TI(latest_ti_and_ts)]))) {
+            tx->ends_[TI(latest_ti_and_ts)] = TS(latest_ti_and_ts);
+            goto retry;
         }
         if (MODE(thread_tx_and_mode) == RDONLY)
             thread_read_abort_counter++;
@@ -404,6 +425,7 @@ private:
         //     sth_ptm_abort();
         // }
         Transaction *tx = TX(thread_tx_and_mode);
+retry:
         int curr_pos = (kVersionSize+pos_-1)%kVersionSize;
         unsigned long long curr_ti_and_ts = objs_[curr_pos].ti_and_ts_; 
         // if ((curr_tx_status_ == nullptr || *curr_tx_status_ == COMMITTED) \
@@ -413,18 +435,30 @@ private:
             if (tx->w_set_->DoesContain(this) == true)
                 return new_;
             // std::cout << "before try lock" << std::endl;
-            if(mutex_.try_lock() == true) {
+            // if(mutex_.try_lock() == true) {
+            int tmp = 0;
+            if(CAS(&lock_, &tmp, 1) == true) {
                 if(curr_pos != ((kVersionSize+pos_-1)%kVersionSize) \
                     || curr_ti_and_ts != objs_[curr_pos].ti_and_ts_) {
-                    mutex_.unlock();
+                    // mutex_.unlock();
+                    tmp = 1;
+                    CAS(&lock_, &tmp, 0);
                     // std::cout << "object changed, " << thread_id << std::endl;
                     sth_ptm_abort();
                 }
                 tx->w_set_->Push(this, curr_pos, curr_ti_and_ts);
                 if (new_ == nullptr)
                     new_ = (T *)objs_[curr_pos].object_.Clone();
+                if(!(IS_USED(tx->ends_[TI(curr_ti_and_ts)]))) {
+                    tx->ends_[TI(curr_ti_and_ts)] = SET_USED(tx->ends_[TI(curr_ti_and_ts)]);
+                    thread_epoch[thread_id][TI(curr_ti_and_ts)] = tx->ends_[TI(curr_ti_and_ts)];
+                }
                 return new_;
             }
+        }
+        if(!(IS_USED(tx->ends_[TI(curr_ti_and_ts)]))) {
+            tx->ends_[TI(curr_ti_and_ts)] = TS(curr_ti_and_ts);
+            goto retry;
         }
         // std::cout << "not find suitable writable object, " << thread_id << std::endl;
         sth_ptm_abort();
@@ -432,12 +466,12 @@ private:
 };
 
 void InitTransaction(Transaction *tx) {
-    for (int i=0; i<kMaxThreadNum; i++) {
-        tx->ends_[i] = thread_timestamps[i];
-        // record timestamps that are in use
-        thread_epoch[thread_id][i] = tx->ends_[i];
-        // std::cout << "init trans:" << thread_epoch[i][thread_id] << std::endl;
-    }
+    // for (int i=0; i<kMaxThreadNum; i++) {
+    //     tx->ends_[i] = thread_timestamps[i];
+    //     // record timestamps that are in use
+    //     thread_epoch[thread_id][i] = tx->ends_[i];
+    //     // std::cout << "init trans:" << thread_epoch[i][thread_id] << std::endl;
+    // }
     tx->status_ = ACTIVE;
     tx->r_set_->Clear();
     tx->w_set_->Clear();
@@ -454,7 +488,8 @@ static jmp_buf *sth_ptm_start(TransactionMode mode) {
     static int does_init = 0;
     if (!does_init) {
         for(int i=0; i<kMaxThreadNum; i++) {
-            thread_timestamps[i] = 1;
+            // thread_timestamps[i][0] = 1;
+            // thread_clock = 1;
             thread_epoch_min[i] = 0;
             for(int j=0; j<kMaxThreadNum; j++) {
                 thread_epoch[i][j] = INF;
@@ -487,18 +522,26 @@ static void sth_ptm_commit() {
     Transaction *tx = TX(thread_tx_and_mode);
     if (MODE(thread_tx_and_mode) == RDWR) {
         sth_ptm_validate(tx);
-        unsigned long long commit_ts = thread_timestamps[thread_id]+1;
+        //unsigned long long commit_ts = thread_timestamps[thread_id][0]+1;
+        // unsigned long long commit_ts = thread_clock + 1;
+        unsigned long long commit_ts = tx->thread_clock + 1;
         // commit writes
         tx->w_set_->CommitWrites(TI_AND_TS(thread_id, commit_ts));
         tx->w_set_->IncPos();
         tx->w_set_->Unlock();
         tx->status_ = COMMITTED;
         mfence();
-        thread_timestamps[thread_id] = commit_ts;
+        // thread_timestamps[thread_id][0] = commit_ts;
+        // thread_clock = commit_ts;
+        tx->thread_clock = commit_ts;
     }
-    for (int i=0; i<kMaxThreadNum; i++) {
-        // update the epoch, INF means next time we will use thread_timestamps[thread_id].
-        thread_epoch[thread_id][i] = INF;
+    // for (int i=0; i<kMaxThreadNum; i++) {
+    //     // update the epoch, INF means next time we will use thread_timestamps[thread_id].
+    //     thread_epoch[thread_id][i] = INF;
+    // }
+    // set ends_ clear
+    for(int i=0; i<kMaxThreadNum; i++) {
+        tx->ends_[i] = CLEAR_USED(tx->ends_[i]);
     }
 }
 
