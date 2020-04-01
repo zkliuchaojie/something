@@ -78,8 +78,8 @@ public:
 
 Value_t HashTable::Get(Key_t key) {
     // the default: doesn't contain
-    Value_t retval=0;
     PTM_START(RDONLY);
+    Value_t retval=0;
     // std::cout << "get" << std::endl;
     auto key_hash = h(&key, sizeof(key));
     auto loc = key_hash % capacity_;
@@ -122,8 +122,8 @@ void HashTable::Insert(Key_t key, Value_t val) {
 }
 
 bool HashTable::Delete(Key_t key) {
-    bool ret = false;
     PTM_START(RDWR);
+    bool ret = false;
     // std::cout << "delete" << std::endl;
     auto key_hash = h(&key, sizeof(key));
     auto loc = key_hash % capacity_;
@@ -154,8 +154,8 @@ bool HashTable::Delete(Key_t key) {
 }
 
 unsigned long long HashTable::Size() {
-    unsigned long long ret = 0;
     PTM_START(RDONLY);
+    unsigned long long ret = 0;
     // std::cout << "size" << std::endl;
     for(int i=0; i<capacity_; i++) {
         PtmObjectWrapper<Entry> *curr = dict_[i];
