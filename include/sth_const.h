@@ -12,5 +12,9 @@ const int kMaxThreadCounter = 16;
 const int kBloomFilterSize = 64;
 const int kVersionSize = 3;
 const unsigned long long kInvalidTiAndTs = ULLONG_MAX;
+// the number of threads in a Cluster.
+const int kClusterSize = 2;
+// the number of Cluster.
+const int kClusterNum = 16;
 
 #endif

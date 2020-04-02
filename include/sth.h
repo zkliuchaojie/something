@@ -32,6 +32,7 @@
 #include <cstring>
 #include <algorithm>
 #include <shared_mutex>
+#include <unistd.h>
 
 // timestamp things
 #define TI_AND_TS(ti, ts)   (((unsigned long long)ti<<(sizeof(unsigned long long)*8-kThreadIdBitSize)) | (ts))
@@ -109,18 +110,73 @@ class RwSet;
 
 #define INF ((unsigned long long)(-1L))
 // global things
-volatile int thread_id_allocator = 0;
 // unsigned long long thread_timestamps[kMaxThreadNum][8]; // default 1
 // thread_local unsigned long long thread_clock = 1;
-volatile unsigned long long thread_epoch_min[kMaxThreadNum];  // defualt 0
+volatile unsigned long long cluster_epoch_min[kClusterNum];  // defualt 0
 // thread_epoch [i][kMaxThreadNum] records all clocks that thread i is using.
-volatile unsigned long long thread_epoch[kMaxThreadNum][kMaxThreadNum]; // default INF
+volatile unsigned long long thread_epoch[kClusterNum][kClusterNum]; // default INF
 
 // thread things
 thread_local Transaction *thread_tx_and_mode = nullptr;
-thread_local int thread_id = -1;
 thread_local unsigned long long thread_read_abort_counter = 0;
 thread_local unsigned long long thread_abort_counter = 0;
+
+class Cluster {
+public:
+    Cluster() {
+        cluster_clock_ = 1;
+        thread_cnt_ = 0;
+        cluster_id_ = 0;
+        thread_ids_.clear();
+    }
+    unsigned long long FetchAndIncClusterClock() {
+        unsigned long long tmp;
+        tmp = cluster_clock_;
+        while(!CAS(&cluster_clock_, &tmp, tmp+1)) {
+            tmp = cluster_clock_;
+        }
+        return tmp;
+    }
+    bool Insert(std::thread::id thread_id) {
+        int tmp = thread_cnt_;
+        if(tmp >= kClusterSize)
+            return false;
+        while(!CAS(&thread_cnt_, &tmp, tmp+1)) {
+            tmp = thread_cnt_;
+            if(tmp >= kClusterSize)
+                return false;
+        }
+        thread_ids_.push_back(thread_id);
+        return true;
+    }
+
+public:
+    unsigned long long cluster_clock_;
+    int thread_cnt_;
+    int cluster_id_;
+    std::vector<std::thread::id> thread_ids_;
+};
+
+Cluster *clusters;
+
+/*
+ * If we never insert thread_id into a cluster, we
+ * alloc a cluster for it, or just return the allocated
+ * cluster. If there are no available cluster, return nullptr.
+ */
+Cluster *GetCluster(std::thread::id thread_id) {
+    for(int i=0; i<kClusterNum; i++) {
+        for(int j=0; j<clusters[i].thread_ids_.size(); j++) {
+            if(thread_id == clusters[i].thread_ids_[j])
+                return &clusters[i];
+        }
+    }
+    for(int i=0; i<kClusterNum; i++) {
+        if(clusters[i].Insert(thread_id) == true)
+            return &clusters[i];
+    }
+    return nullptr;
+}
 
 /*
  * All ptm objects should inherit this abstract class.
@@ -227,9 +283,9 @@ public:
      * ends_ are used to record all threads' current time, and all
      * objects' commit time should be less or equal it.
      */
-    unsigned long long thread_clock_;
-    unsigned long long ends_[kMaxThreadNum];
-    unsigned long long latest_[kMaxThreadNum];
+    Cluster *cluster_;
+    unsigned long long ends_[kClusterNum];
+    unsigned long long latest_[kClusterNum];
     RwSet *r_set_;
     RwSet *w_set_;
     sigjmp_buf *env_;
@@ -237,12 +293,16 @@ public:
 
 public:
     Transaction() {
-        thread_clock_ = 1;
-        memset(ends_, 0, sizeof(unsigned long long)*kMaxThreadNum);
-        memset(latest_, 0, sizeof(unsigned long long)*kMaxThreadNum);
+        memset(ends_, 0, sizeof(unsigned long long)*kClusterNum);
+        memset(latest_, 0, sizeof(unsigned long long)*kClusterNum);
         status_ = UNDETERMINED;
         r_set_ = new RwSet();
         w_set_ = new RwSet();
+        cluster_ = GetCluster(std::this_thread::get_id());
+        if(cluster_ == nullptr) {
+            std::cout << "there are no available clusters" << std::endl;
+            exit(-1);
+        }
         env_ = (sigjmp_buf *)malloc(sizeof(sigjmp_buf));
     }
  
@@ -317,22 +377,22 @@ public:
             // the first condition is a must, because objs may be written by aborted tx.
             // std::cout << old_id << " " << thread_epoch_min[old_id] << " " << old_ts << std::endl;
             if (objs_[(pos_+1)%kVersionSize].ti_and_ts_ == kInvalidTiAndTs \
-                || old_ts <= thread_epoch_min[old_id]) {
+                || old_ts <= cluster_epoch_min[old_id]) {
                 curr_tx_status_ = tx_status;
                 mfence();
                 objs_[pos_].ti_and_ts_ = ti_and_ts;
                 objs_[pos_].object_.Copy(new_);
             } else {
-                // update thread_epoch_min
-                unsigned long long mins[kMaxThreadNum];
-                for(int i=0; i<kMaxThreadNum; i++)
+                // update cluster_epoch_min
+                unsigned long long mins[kClusterNum];
+                for(int i=0; i<kClusterNum; i++)
                     mins[i] = INF;
                 Transaction *tx = TX(thread_tx_and_mode);
-                for(int i=0; i<kMaxThreadNum; i++) {
+                for(int i=0; i<kClusterNum; i++) {
                     // we don't need to check self, because we always access most latest version.
-                    if(i == thread_id)
+                    if(i == tx->cluster_->cluster_id_)
                         continue;
-                    for(int j=0; j<kMaxThreadNum; j++) {
+                    for(int j=0; j<kClusterNum; j++) {
                         // if(thread_epoch[i][j] == INF) {
                         //     if(tx->ends_[j] < mins[j])
                         //         mins[j] = tx->ends_[j];
@@ -342,10 +402,10 @@ public:
                         }
                     }
                 }
-                for(int i=0; i<kMaxThreadNum; i++) {
-                    if(mins[i] > thread_epoch_min[i])
+                for(int i=0; i<kClusterNum; i++) {
+                    if(mins[i] > cluster_epoch_min[i])
                         // there is a concurrent bug.
-                        thread_epoch_min[i] = mins[i];
+                        cluster_epoch_min[i] = mins[i];
                 }
                 // this time, abort directly
                 // std::cout << "can not overwrite" << std::endl;
@@ -401,8 +461,8 @@ retry:
         // tx->latest_[TI(curr_ti_and_ts)] = TS(curr_ti_and_ts);
         // unsigned long long latest_ti_and_ts = curr_ti_and_ts;
         if (curr_tx_status_ == nullptr || *curr_tx_status_ == COMMITTED) {
-            if (TS(curr_ti_and_ts) > tx->latest_[TI(curr_ti_and_ts)])
-                tx->latest_[TI(curr_ti_and_ts)] = TS(curr_ti_and_ts);
+            // if (TS(curr_ti_and_ts) > tx->latest_[TI(curr_ti_and_ts)])
+            //     tx->latest_[TI(curr_ti_and_ts)] = TS(curr_ti_and_ts);
             if (curr_tx_status_ == nullptr || TS(curr_ti_and_ts) <= tx->ends_[TI(curr_ti_and_ts)]) {
                 // if ((TS(curr_ti_and_ts) <= tx->ends_[TI(curr_ti_and_ts)])) { 
                 // printf("%p\n", &objs_[curr_pos].shared_mutex_);
@@ -462,8 +522,8 @@ retry:
         mfence();
         // tx->latest_[TI(curr_ti_and_ts)] = TS(curr_ti_and_ts);
         if (curr_tx_status_ == nullptr || *curr_tx_status_ == COMMITTED) {
-            if (TS(curr_ti_and_ts) > tx->latest_[TI(curr_ti_and_ts)])
-                tx->latest_[TI(curr_ti_and_ts)] = TS(curr_ti_and_ts);
+            // if (TS(curr_ti_and_ts) > tx->latest_[TI(curr_ti_and_ts)])
+            //     tx->latest_[TI(curr_ti_and_ts)] = TS(curr_ti_and_ts);
             if (curr_tx_status_ == nullptr || TS(curr_ti_and_ts) <= tx->ends_[TI(curr_ti_and_ts)]) {
                 // if ((TS(curr_ti_and_ts) <= tx->ends_[TI(curr_ti_and_ts)])) {
                 // check if we already put this object into write set
@@ -504,19 +564,15 @@ retry:
 };
 
 void InitTransaction(Transaction *tx) {
-    // for (int i=0; i<kMaxThreadNum; i++) {
-    //     tx->ends_[i] = thread_timestamps[i];
-    //     // record timestamps that are in use
-    //     thread_epoch[thread_id][i] = tx->ends_[i];
-    //     // std::cout << "init trans:" << thread_epoch[i][thread_id] << std::endl;
-    // }
-    for(int i=0; i<kMaxThreadNum; i++) {
-        tx->ends_[i] = tx->latest_[i];
-        // std::cout << tx->ends_[i] << ' ';
-        thread_epoch[thread_id][i] = tx->ends_[i];
+    for (int i=0; i<kClusterNum; i++) {
+        tx->ends_[i] = clusters[i].cluster_clock_;
+        // record timestamps that are in use
+        thread_epoch[tx->cluster_->cluster_id_][i] = tx->ends_[i];
+        // std::cout << "init trans:" << thread_epoch[i][thread_id] << std::endl;
     }
     // std::cout << std::endl;
     // std::cout << tx->thread_clock_ << std::endl;
+    // std::cout << tx->cluster_->cluster_id_ << " " << tx->cluster_->thread_cnt_ << std::endl;
     tx->status_ = ACTIVE;
     tx->r_set_->Clear();
     tx->w_set_->Clear();
@@ -533,21 +589,21 @@ static void sth_ptm_validate(Transaction *tx) {
 static jmp_buf *sth_ptm_start(TransactionMode mode) {
     static int does_init = 0;
     if (!does_init) {
-        for(int i=0; i<kMaxThreadNum; i++) {
+        for(int i=0; i<kClusterNum; i++) {
             // thread_timestamps[i][0] = 1;
             // thread_clock = 1;
-            thread_epoch_min[i] = 0;
-            for(int j=0; j<kMaxThreadNum; j++) {
+            cluster_epoch_min[i] = 0;
+            for(int j=0; j<kClusterNum; j++) {
                 thread_epoch[i][j] = INF;
                 // std::cout << "init thread_epoch:" << thread_epoch[i][j] << std::endl;
             }
         }
+        // init cluster
+        clusters = new Cluster[kClusterNum];
+        for(int i=0; i<kClusterNum; i++)
+            clusters[i].cluster_id_ = i;
         // std::cout << "init thread epoch" << std::endl;
         does_init = 1;
-    }
-    if (thread_id == -1) {
-        thread_id = ATOMIC_FETCH_ADD(&thread_id_allocator, 1);
-        // std::cout << "thread_id: " << thread_id << std::endl;
     }
     Transaction *tx;
     if (thread_tx_and_mode == nullptr)
@@ -570,28 +626,28 @@ static void sth_ptm_commit() {
         sth_ptm_validate(tx);
         //unsigned long long commit_ts = thread_timestamps[thread_id][0]+1;
         // unsigned long long commit_ts = thread_clock + 1;
-        unsigned long long commit_ts = tx->thread_clock_ + 1;
+        unsigned long long commit_ts = tx->cluster_->FetchAndIncClusterClock();
         // commit writes
         TransactionStatus *tx_status = new TransactionStatus;
         *tx_status = tx->status_;
-        tx->w_set_->CommitWrites(TI_AND_TS(thread_id, commit_ts), tx_status);
+        tx->w_set_->CommitWrites(TI_AND_TS(tx->cluster_->cluster_id_, commit_ts), tx_status);
         tx->w_set_->IncPos();
         tx->w_set_->Unlock();
         mfence();
         *tx_status = tx->status_ = COMMITTED;
         // thread_timestamps[thread_id][0] = commit_ts;
         // thread_clock = commit_ts;
-        tx->thread_clock_ = commit_ts;
+        // tx->thread_clock_ = commit_ts;
     }
     // for (int i=0; i<kMaxThreadNum; i++) {
     //     // update the epoch, INF means next time we will use thread_timestamps[thread_id].
     //     thread_epoch[thread_id][i] = INF;
     // }
     // set ends_ clear
-    for(int i=0; i<kMaxThreadNum; i++) {
+    for(int i=0; i<kClusterNum; i++) {
         tx->ends_[i] = CLEAR_USED(tx->ends_[i]);
         // there is still a bug.
-        thread_epoch[thread_id][i] = INF;
+        thread_epoch[tx->cluster_->cluster_id_][i] = INF;
     }
 }
 
