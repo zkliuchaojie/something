@@ -46,11 +46,6 @@
 #define TX(tx_and_mode)         ((Transaction *)((unsigned long long)tx_and_mode & (~MODE_MARK)))
 #define TX_AND_MODE(tx, mode)   ((Transaction *)((unsigned long long)tx | mode))
 
-// transaction ends_ things
-#define IS_USED(tx)             ((tx>>(63))&0x1)
-#define SET_USED(tx)            (tx|((unsigned long long)0x1<<(63)))
-#define CLEAR_USED(tx)          (tx&((unsigned long long)0x7fffffffffffffff))
-
 #define pr_info_and_exit(str) do { \
     std::cout << str << ", FILE: " << __FILE__ << \
         ", LINE: " << __LINE__ << std::endl; \
@@ -73,6 +68,9 @@
 #define PTM_COMMIT do { \
     sth_ptm_commit(); \
 }while(0);
+
+class Transaction;
+void sth_ptm_validate(Transaction *tx);
 
 // #define PTM_COMMIT              \
 //     sth_ptm_commit();           \
@@ -110,10 +108,7 @@ class RwSet;
 #define INF ((unsigned long long)(-1L))
 // global things
 volatile int thread_id_allocator = 0;
-// unsigned long long thread_timestamps[kMaxThreadNum][8]; // default 1
-// thread_local unsigned long long thread_clock = 1;
 volatile unsigned long long thread_epoch_min[kMaxThreadNum];  // defualt 0
-// thread_epoch [i][kMaxThreadNum] records all clocks that thread i is using.
 volatile unsigned long long thread_epoch[kMaxThreadNum][kMaxThreadNum]; // default INF
 
 // thread things
@@ -273,11 +268,9 @@ public:
     }
 
     T *Open(OpenMode mode) {
-        //std::cout << "Open" << std::endl;
         if (mode == READ) {
             return OpenWithRead();
         } else if (mode == WRITE) {
-            //std::cout << "before OpenWithWrite" << std::endl;
             return OpenWithWrite();
         }
         else if (mode == INIT)
@@ -315,7 +308,6 @@ public:
             int old_id = TI(objs_[(pos_+1)%kVersionSize].ti_and_ts_);
             unsigned long long old_ts = TS(objs_[(pos_+1)%kVersionSize].ti_and_ts_);
             // the first condition is a must, because objs may be written by aborted tx.
-            // std::cout << old_id << " " << thread_epoch_min[old_id] << " " << old_ts << std::endl;
             if (objs_[(pos_+1)%kVersionSize].ti_and_ts_ == kInvalidTiAndTs \
                 || old_ts <= thread_epoch_min[old_id]) {
                 curr_tx_status_ = tx_status;
@@ -333,10 +325,6 @@ public:
                     if(i == thread_id)
                         continue;
                     for(int j=0; j<kMaxThreadNum; j++) {
-                        // if(thread_epoch[i][j] == INF) {
-                        //     if(tx->ends_[j] < mins[j])
-                        //         mins[j] = tx->ends_[j];
-                        // } else 
                         if (thread_epoch[i][j] < mins[j]) {
                             mins[j] = thread_epoch[i][j];
                         }
@@ -347,8 +335,6 @@ public:
                         // there is a concurrent bug.
                         thread_epoch_min[i] = mins[i];
                 }
-                // this time, abort directly
-                // std::cout << "can not overwrite" << std::endl;
                 sth_ptm_abort();
             }
         }
@@ -390,28 +376,22 @@ private:
      * need users tell us whether it is a update transaction.
      */
     T* OpenWithRead() {
-        // std::cout << "OpenWithRead, " << thread_id << std::endl;
         Transaction *tx = TX(thread_tx_and_mode);
-retry:
         // pos_ maybe modifed by other tx, so we first get it, and if it is changed,
         // in OpenWithRead, which won't cause unconsitency. 
         int curr_pos = (kVersionSize+pos_-1)%kVersionSize;
         unsigned long long curr_ti_and_ts = objs_[curr_pos].ti_and_ts_;
         mfence();
-        // tx->latest_[TI(curr_ti_and_ts)] = TS(curr_ti_and_ts);
-        // unsigned long long latest_ti_and_ts = curr_ti_and_ts;
         if (curr_tx_status_ == nullptr || *curr_tx_status_ == COMMITTED) {
             if (TS(curr_ti_and_ts) > tx->latest_[TI(curr_ti_and_ts)])
                 tx->latest_[TI(curr_ti_and_ts)] = TS(curr_ti_and_ts);
+            if((MODE(thread_tx_and_mode) == RDWR) && TS(curr_ti_and_ts)>tx->ends_[TI(curr_ti_and_ts)]) {
+                sth_ptm_validate(tx);
+                tx->ends_[TI(curr_ti_and_ts)] = TS(curr_ti_and_ts);
+            }
             if (curr_tx_status_ == nullptr || TS(curr_ti_and_ts) <= tx->ends_[TI(curr_ti_and_ts)]) {
-                // if ((TS(curr_ti_and_ts) <= tx->ends_[TI(curr_ti_and_ts)])) { 
-                // printf("%p\n", &objs_[curr_pos].shared_mutex_);
                 if(MODE(thread_tx_and_mode) == RDWR)
                     tx->r_set_->Push(this, curr_pos, curr_ti_and_ts);
-                // if(!(IS_USED(tx->ends_[TI(curr_ti_and_ts)]))) {
-                //     tx->ends_[TI(curr_ti_and_ts)] = SET_USED(tx->ends_[TI(curr_ti_and_ts)]);
-                //     thread_epoch[thread_id][TI(curr_ti_and_ts)] = tx->ends_[TI(curr_ti_and_ts)];
-                // }
                 return &(objs_[curr_pos].object_);
             }
         } else if (MODE(thread_tx_and_mode) == RDONLY) {
@@ -421,28 +401,12 @@ retry:
                 if(curr_ti_and_ts == kInvalidTiAndTs)
                     break;
                 if(TS(curr_ti_and_ts) <= tx->ends_[TI(curr_ti_and_ts)]) {
-                    // if return false, which means no candidates can be used.
-                    // if(!(IS_USED(tx->ends_[TI(curr_ti_and_ts)]))) {
-                    //     tx->ends_[TI(curr_ti_and_ts)] = SET_USED(tx->ends_[TI(curr_ti_and_ts)]);
-                    //     thread_epoch[thread_id][TI(curr_ti_and_ts)] = tx->ends_[TI(curr_ti_and_ts)];
-                    // }
                     return &(objs_[curr_pos].object_);
                 }
             }
         }
-        // if(!(IS_USED(tx->ends_[TI(latest_ti_and_ts)]))) {
-        //     tx->ends_[TI(latest_ti_and_ts)] = TS(latest_ti_and_ts);
-        //     goto retry;
-        // }
         if (MODE(thread_tx_and_mode) == RDONLY)
             thread_read_abort_counter++;
-        // std::cout << "not find suitable objects, " << thread_id << std::endl; 
-        // printf("%p\n", curr_tx_status_);
-        // if(curr_tx_status_ != nullptr)
-        //    std::cout << *curr_tx_status_ << std::endl;
-        // printf("%p %d\n", curr_tx_status_, *curr_tx_status_);
-        // std::cout << thread_id << " " << tx->ends_[TI(curr_ti_and_ts)] << " " << TS(curr_ti_and_ts) << std::endl;
-
         sth_ptm_abort();
     }
 
@@ -451,81 +415,51 @@ retry:
      * do not need to use Pretect/Unprotect in mm_pool.
      */
     T *OpenWithWrite() { 
-        // std::cout << "OpenWithWrite, " << thread_id << std::endl;
-        // if ((curr_tx_status_!=nullptr && *curr_tx_status_ != COMMITTED)) {
-        //     sth_ptm_abort();
-        // }
         Transaction *tx = TX(thread_tx_and_mode);
-retry:
         int curr_pos = (kVersionSize+pos_-1)%kVersionSize;
         unsigned long long curr_ti_and_ts = objs_[curr_pos].ti_and_ts_; 
         mfence();
-        // tx->latest_[TI(curr_ti_and_ts)] = TS(curr_ti_and_ts);
         if (curr_tx_status_ == nullptr || *curr_tx_status_ == COMMITTED) {
             if (TS(curr_ti_and_ts) > tx->latest_[TI(curr_ti_and_ts)])
                 tx->latest_[TI(curr_ti_and_ts)] = TS(curr_ti_and_ts);
+            if(TS(curr_ti_and_ts)>tx->ends_[TI(curr_ti_and_ts)]) {
+                sth_ptm_validate(tx);
+                tx->ends_[TI(curr_ti_and_ts)] = TS(curr_ti_and_ts);
+            }
             if (curr_tx_status_ == nullptr || TS(curr_ti_and_ts) <= tx->ends_[TI(curr_ti_and_ts)]) {
-                // if ((TS(curr_ti_and_ts) <= tx->ends_[TI(curr_ti_and_ts)])) {
-                // check if we already put this object into write set
                 if (tx->w_set_->DoesContain(this) == true)
                     return new_;
-                // std::cout << "before try lock" << std::endl;
-                // if(mutex_.try_lock() == true) {
                 int tmp = 0;
                 if(CAS(&lock_, &tmp, 1) == true) {
                     if(curr_pos != ((kVersionSize+pos_-1)%kVersionSize) \
                         || curr_ti_and_ts != objs_[curr_pos].ti_and_ts_) {
-                        // mutex_.unlock();
                         tmp = 1;
                         CAS(&lock_, &tmp, 0);
-                        // std::cout << "object changed, " << thread_id << std::endl;
                         sth_ptm_abort();
                     }
                     tx->w_set_->Push(this, curr_pos, curr_ti_and_ts);
                     if (new_ == nullptr)
                         new_ = (T *)objs_[curr_pos].object_.Clone();
-                    // if(!(IS_USED(tx->ends_[TI(curr_ti_and_ts)]))) {
-                    //     tx->ends_[TI(curr_ti_and_ts)] = SET_USED(tx->ends_[TI(curr_ti_and_ts)]);
-                    //     thread_epoch[thread_id][TI(curr_ti_and_ts)] = tx->ends_[TI(curr_ti_and_ts)];
-                    // }
                     return new_;
                 }
             }
         }
-        // if(!(IS_USED(tx->ends_[TI(curr_ti_and_ts)]))) {
-        //     tx->ends_[TI(curr_ti_and_ts)] = TS(curr_ti_and_ts);
-        //     goto retry;
-        // }
-        // std::cout << "not find suitable writable object, " << thread_id << std::endl;
-        // printf("%p %d\n", curr_tx_status_, *curr_tx_status_);
-        // std::cout << thread_id << " " << tx->ends_[TI(curr_ti_and_ts)] << " " << TS(curr_ti_and_ts) << std::endl;
         sth_ptm_abort();
     }
 };
 
 void InitTransaction(Transaction *tx) {
-    // for (int i=0; i<kMaxThreadNum; i++) {
-    //     tx->ends_[i] = thread_timestamps[i];
-    //     // record timestamps that are in use
-    //     thread_epoch[thread_id][i] = tx->ends_[i];
-    //     // std::cout << "init trans:" << thread_epoch[i][thread_id] << std::endl;
-    // }
     for(int i=0; i<kMaxThreadNum; i++) {
         tx->ends_[i] = tx->latest_[i];
-        // std::cout << tx->ends_[i] << ' ';
         thread_epoch[thread_id][i] = tx->ends_[i];
     }
-    // std::cout << std::endl;
-    // std::cout << tx->thread_clock_ << std::endl;
     tx->status_ = ACTIVE;
     tx->r_set_->Clear();
     tx->w_set_->Clear();
 }
 
-static void sth_ptm_validate(Transaction *tx) {
-    // std::cout << tx->does_use_olders_ << std::endl;
+void sth_ptm_validate(Transaction *tx) {
     if (tx->r_set_->Validate() == false) {
-        // std::cout << "validate" << std::endl;
         sth_ptm_abort();
     }
 }
@@ -534,20 +468,15 @@ static jmp_buf *sth_ptm_start(TransactionMode mode) {
     static int does_init = 0;
     if (!does_init) {
         for(int i=0; i<kMaxThreadNum; i++) {
-            // thread_timestamps[i][0] = 1;
-            // thread_clock = 1;
             thread_epoch_min[i] = 0;
             for(int j=0; j<kMaxThreadNum; j++) {
                 thread_epoch[i][j] = INF;
-                // std::cout << "init thread_epoch:" << thread_epoch[i][j] << std::endl;
             }
         }
-        // std::cout << "init thread epoch" << std::endl;
         does_init = 1;
     }
     if (thread_id == -1) {
         thread_id = ATOMIC_FETCH_ADD(&thread_id_allocator, 1);
-        // std::cout << "thread_id: " << thread_id << std::endl;
     }
     Transaction *tx;
     if (thread_tx_and_mode == nullptr)
@@ -556,9 +485,7 @@ static jmp_buf *sth_ptm_start(TransactionMode mode) {
         tx = TX(thread_tx_and_mode);
     thread_tx_and_mode = TX_AND_MODE(tx, mode);
     InitTransaction(tx);
-    //std::cout << "start ptm" << std::endl;
     return tx->env_;
-    // return nullptr;
 }
 
 /*
@@ -568,8 +495,6 @@ static void sth_ptm_commit() {
     Transaction *tx = TX(thread_tx_and_mode);
     if (MODE(thread_tx_and_mode) == RDWR) {
         sth_ptm_validate(tx);
-        //unsigned long long commit_ts = thread_timestamps[thread_id][0]+1;
-        // unsigned long long commit_ts = thread_clock + 1;
         unsigned long long commit_ts = tx->thread_clock_ + 1;
         // commit writes
         TransactionStatus *tx_status = new TransactionStatus;
@@ -579,17 +504,10 @@ static void sth_ptm_commit() {
         tx->w_set_->Unlock();
         mfence();
         *tx_status = tx->status_ = COMMITTED;
-        // thread_timestamps[thread_id][0] = commit_ts;
-        // thread_clock = commit_ts;
         tx->thread_clock_ = commit_ts;
     }
-    // for (int i=0; i<kMaxThreadNum; i++) {
-    //     // update the epoch, INF means next time we will use thread_timestamps[thread_id].
-    //     thread_epoch[thread_id][i] = INF;
-    // }
-    // set ends_ clear
+    // update thread_epoch
     for(int i=0; i<kMaxThreadNum; i++) {
-        tx->ends_[i] = CLEAR_USED(tx->ends_[i]);
         // there is still a bug.
         thread_epoch[thread_id][i] = INF;
     }
@@ -602,9 +520,7 @@ __attribute_noinline__ static void sth_ptm_abort() {
     tx->w_set_->Unlock();
     InitTransaction(tx);
     thread_abort_counter++;
-    // std::cout << "abort, " << thread_id << std::endl;
     siglongjmp(*(tx->env_), 1);
-    // throw TransactionExceptionAbort{};
 }
 
 #endif

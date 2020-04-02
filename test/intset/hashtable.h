@@ -51,7 +51,7 @@ public:
 class HashTable {
 public:
     HashTable() {
-        capacity_ = 10000;     // 10k
+        capacity_ = 1000000;     // 1000k
         dict_ = new PtmObjectWrapper<Entry>*[capacity_];
         PTM_START(RDWR);
         for(int i=0; i<capacity_; i++) {
