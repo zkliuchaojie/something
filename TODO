@@ -1,1 +1,7 @@
 # read/write is becoming a bottleneck, and try to resolve it with flags.
+
+# 1. when testing, we should consider different contention, different contention
+has different scalability.
+
+# 2. overall, modifying a global variable with CAS is worse than reading other threads' clock.
+you can test it with branch feature-durability-with-epoch-with-cluster.
