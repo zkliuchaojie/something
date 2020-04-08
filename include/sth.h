@@ -141,6 +141,7 @@ public:
     virtual bool Validate(int pos, unsigned long long version_num) = 0;
     virtual void CommitWrite(unsigned long long commit_timestamp, TransactionStatus *tx_status) = 0;
     virtual void IncPos() = 0;
+    virtual void Persist() = 0;
     virtual void Unlock() = 0;
     virtual ~AbstractPtmObjectWrapper() {};
 };
@@ -202,6 +203,11 @@ public:
     void IncPos() {
         for (int i=0; i<entries_num_; i++) {
             set_[i].ptm_object_wrapper_->IncPos(); 
+        }
+    }
+    void Persist() {
+        for (int i=0; i<entries_num_; i++) {
+            set_[i].ptm_object_wrapper_->Persist();
         }
     }
     void FreeNew() {
@@ -345,10 +351,14 @@ public:
     void IncPos() {
         pos_ = (pos_+1)%kVersionSize;
     }
+    void Persist() {
+        clflush((char *)&curr_tx_status_, sizeof(TransactionStatus));
+        clflush((char *)&pos_, sizeof(int));
+        clflush((char *)&objs_[pos_], sizeof(OldObject));
+    }
     void Unlock() {
-        // mutex_.unlock();
-        int tmp = 1;
-        CAS(&lock_, &tmp, 0);
+        // lock_ = 0 is enough
+        lock_ = 0;
     }
 private:
     volatile TransactionStatus *curr_tx_status_;
@@ -520,9 +530,12 @@ static void sth_ptm_commit() {
         *tx_status = tx->status_;
         tx->w_set_->CommitWrites(TI_AND_TS(thread_id, commit_ts), tx_status);
         tx->w_set_->IncPos();
+        tx->w_set_->Persist();
         tx->w_set_->Unlock();
         mfence();
         *tx_status = tx->status_ = COMMITTED;
+        // be careful, we may loss this memory space
+        clflush((char *)tx_status, sizeof(TransactionStatus));
         mfence();
         thread_clocks[thread_id] = commit_ts;
     }
