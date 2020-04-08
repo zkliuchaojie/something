@@ -276,6 +276,7 @@ static void *test(void *data)
   }
   d->nb_abort = thread_abort_counter;
   d->nb_read_abort = thread_read_abort_counter;
+  PTM_THREAD_CLEAN;
   return NULL;
 }
 
@@ -506,7 +507,7 @@ int main(int argc, char **argv)
   }
     size = set_size(set);
     printf("Set size     : %d\n", size);
-
+  PTM_THREAD_CLEAN;
   /* Access set from all threads */
   barrier_init(&barrier, nb_threads + 1);
   pthread_attr_init(&attr);

@@ -69,6 +69,10 @@
     sth_ptm_commit(); \
 }while(0);
 
+#define PTM_THREAD_CLEAN do { \
+    sth_ptm_clean_thread(); \
+}while(0);
+
 class Transaction;
 void sth_ptm_validate(Transaction *tx);
 
@@ -108,6 +112,7 @@ class RwSet;
 #define INF ((unsigned long long)(-1L))
 // global things
 volatile int thread_id_allocator = 0;
+volatile unsigned long long thread_clocks[kMaxThreadNum];     //default 1
 volatile unsigned long long thread_epoch_min[kMaxThreadNum];  // defualt 0
 volatile unsigned long long thread_epoch[kMaxThreadNum][kMaxThreadNum]; // default INF
 
@@ -222,20 +227,21 @@ public:
      * ends_ are used to record all threads' current time, and all
      * objects' commit time should be less or equal it.
      */
-    unsigned long long thread_clock_;
     unsigned long long ends_[kMaxThreadNum];
     unsigned long long latest_[kMaxThreadNum];
     RwSet *r_set_;
     RwSet *w_set_;
     sigjmp_buf *env_;
     volatile TransactionStatus status_;
+    int delay_to_read_clocks_counter_;
 
 public:
     Transaction() {
-        thread_clock_ = 1;
+        thread_clocks[thread_id] = 1;
         memset(ends_, 0, sizeof(unsigned long long)*kMaxThreadNum);
         memset(latest_, 0, sizeof(unsigned long long)*kMaxThreadNum);
         status_ = UNDETERMINED;
+        delay_to_read_clocks_counter_ = 0;
         r_set_ = new RwSet();
         w_set_ = new RwSet();
         env_ = (sigjmp_buf *)malloc(sizeof(sigjmp_buf));
@@ -316,24 +322,21 @@ public:
                 objs_[pos_].object_.Copy(new_);
             } else {
                 // update thread_epoch_min
-                unsigned long long mins[kMaxThreadNum];
-                for(int i=0; i<kMaxThreadNum; i++)
+                unsigned long long mins[thread_id_allocator];
+                for(int i=0; i<thread_id_allocator; i++)
                     mins[i] = INF;
                 Transaction *tx = TX(thread_tx_and_mode);
-                for(int i=0; i<kMaxThreadNum; i++) {
-                    // we don't need to check self, because we always access most latest version.
-                    if(i == thread_id)
-                        continue;
-                    for(int j=0; j<kMaxThreadNum; j++) {
+                for(int i=0; i<thread_id_allocator; i++) {
+                    for(int j=0; j<thread_id_allocator; j++) {
                         if (thread_epoch[i][j] < mins[j]) {
                             mins[j] = thread_epoch[i][j];
                         }
                     }
                 }
-                for(int i=0; i<kMaxThreadNum; i++) {
-                    if(mins[i] > thread_epoch_min[i])
-                        // there is a concurrent bug.
+                for(int i=0; i<thread_id_allocator; i++) {
+                    if(mins[i] > thread_epoch_min[i]) {
                         thread_epoch_min[i] = mins[i];
+                    }
                 }
                 sth_ptm_abort();
             }
@@ -449,9 +452,25 @@ private:
 };
 
 void InitTransaction(Transaction *tx) {
-    for(int i=0; i<kMaxThreadNum; i++) {
-        tx->ends_[i] = tx->latest_[i];
-        thread_epoch[thread_id][i] = tx->ends_[i];
+    /*
+     * we need to update thread_epoch periodically, even
+     * there is no tx to execute, or the CommitWrite may
+     * be blocked.
+     */
+    if (tx->delay_to_read_clocks_counter_ == 0) {
+        for(int i=0; i<kMaxThreadNum; i++) {
+            tx->ends_[i] = tx->latest_[i];
+            thread_epoch[thread_id][i] = tx->ends_[i];
+        }
+        tx->delay_to_read_clocks_counter_++;
+    } else {
+        for(int i=0; i<kMaxThreadNum; i++) {
+            tx->ends_[i] = thread_clocks[i];
+            thread_epoch[thread_id][i] = tx->ends_[i];
+        }
+        tx->delay_to_read_clocks_counter_++;
+        if(tx->delay_to_read_clocks_counter_ == 100)
+            tx->delay_to_read_clocks_counter_ = 0;
     }
     tx->status_ = ACTIVE;
     tx->r_set_->Clear();
@@ -495,7 +514,7 @@ static void sth_ptm_commit() {
     Transaction *tx = TX(thread_tx_and_mode);
     if (MODE(thread_tx_and_mode) == RDWR) {
         sth_ptm_validate(tx);
-        unsigned long long commit_ts = tx->thread_clock_ + 1;
+        unsigned long long commit_ts = thread_clocks[thread_id] + 1;
         // commit writes
         TransactionStatus *tx_status = new TransactionStatus;
         *tx_status = tx->status_;
@@ -504,12 +523,13 @@ static void sth_ptm_commit() {
         tx->w_set_->Unlock();
         mfence();
         *tx_status = tx->status_ = COMMITTED;
-        tx->thread_clock_ = commit_ts;
+        mfence();
+        thread_clocks[thread_id] = commit_ts;
     }
     // update thread_epoch
     for(int i=0; i<kMaxThreadNum; i++) {
-        // there is still a bug.
-        thread_epoch[thread_id][i] = INF;
+        if (tx->latest_[i] > thread_epoch[thread_id][i])
+            thread_epoch[thread_id][i] = tx->latest_[i];
     }
 }
 
@@ -521,6 +541,12 @@ __attribute_noinline__ static void sth_ptm_abort() {
     InitTransaction(tx);
     thread_abort_counter++;
     siglongjmp(*(tx->env_), 1);
+}
+
+void sth_ptm_clean_thread() {
+    for(int i=0; i<kMaxThreadNum; i++) {
+        thread_epoch[thread_id][i] = INF;
+    }
 }
 
 #endif
