@@ -1,16 +1,16 @@
 #ifndef INTSET_LINKEDLIST_H_
 #define INTSET_LINKEDLIST_H_
 
-#ifndef STH_H_
-#include "sth.h"
-#endif
+// #ifndef STH_INTERFACE_TL2_H_
+// #include "sth_interface_TL2.h"
+// #endif
 
-#ifndef MM_PARTITION_H_
-#include "mm_partition.h"
-#endif
+// #ifndef ORIGINAL_INTERFACE_TL2_H_
+// #include "original_interface_TL2.h"
+// #endif
 
-#ifndef MM_POOL_H_
-#include "mm_pool.h"
+#ifndef ORDO_INTERFACE_TL2_H_
+#include "ordo_interface_TL2.h"
 #endif
 
 #ifndef INTSET_H_
@@ -20,7 +20,7 @@
 /*
  * PO means Ptm Object.
  */
-class PONode : public AbstractPtmObject {
+class PONode : public PtmObjectInterface {
 public:
     Value_t val_;
     PtmObjectWrapper<PONode> *next_;
@@ -30,13 +30,13 @@ public:
     PONode(Value_t val) : val_(val), next_(nullptr) {};
     PONode(Value_t val, PtmObjectWrapper<PONode> *next) : val_(val), next_(next) {};
     ~PONode() {};
-    AbstractPtmObject *Clone() {
+    PtmObjectInterface *Clone() {
         PONode *po_node = new PONode();
         po_node->val_ = val_;
         po_node->next_ = next_;
         return po_node;
     }
-    void Copy(AbstractPtmObject *ptm_object) {
+    void Copy(PtmObjectInterface *ptm_object) {
         PONode *po_node = (PONode *)ptm_object;
         val_ = po_node->val_;
         next_ = po_node->next_;
@@ -49,37 +49,36 @@ public:
     PtmObjectWrapper<PONode> *sentinel_;
 
 public:
-    Pool<PONode> *po_node_pool_;
-
-public:
     LinkedList() {
         PTM_START(RDWR);
         sentinel_ = new PtmObjectWrapper<PONode>();
-        PONode *po_node = sentinel_->Open(INIT);
+        PONode *po_node = sentinel_->Open(WRITE);
         po_node->next_ = sentinel_;
         PTM_COMMIT;
     };
     ~LinkedList() {
-        delete po_node_pool_;
+        ;
     }
-    // if val exists, return true, or false
-    bool Search(Value_t val);
-    void Insert(Value_t val);
-    // if val exists and is deleted successfully, return ture
-    bool Delete(Value_t val);
+    // if exists, return 1, else return 0
+    Value_t Get(Key_t key);
+    // key is equal to val
+    bool Update(Key_t key, Value_t val);
+    // key is equal to val
+    int Insert(Key_t key, Value_t val);
+    int Delete(Key_t key);
     unsigned long long Size();
 };
 
-bool LinkedList::Search(Value_t val) {
+Value_t LinkedList::Get(Key_t key) {
     PTM_START(RDONLY);
-    bool retval = false;
+     Value_t retval=0;
     PONode *node = sentinel_->Open(READ);
     // skip the sentinel
     PtmObjectWrapper<PONode> *po_node_wrapper = node->next_;
     while(po_node_wrapper != sentinel_) {
         PONode *node = po_node_wrapper->Open(READ);
-        if(node->val_ == val) {
-            retval = true;
+        if(node->val_ == key) {
+            retval = 1;
             break;
         }else {
             po_node_wrapper = node->next_;
@@ -89,7 +88,34 @@ bool LinkedList::Search(Value_t val) {
     return retval;
 }
 
-void LinkedList::Insert(Value_t val) {
+bool LinkedList::Update(Key_t key, Value_t val) {
+    PTM_START(RDWR);
+    bool retval = false;
+    // std::cout <<"delete: " << key << std::endl;
+    PONode *tmp;
+    PtmObjectWrapper<PONode> *prev = sentinel_;
+    PONode *node = sentinel_->Open(READ);
+    PtmObjectWrapper<PONode> *curr = node->next_;
+    node = curr->Open(READ);
+    while(curr != sentinel_ && val > node->val_) {
+        // std::cout << "delete" << std::endl;
+        prev = curr;
+        curr = node->next_;
+        node = curr->Open(READ);
+    }
+    if(val == node->val_) {
+        // NOTE: we do not consider releasing the deleted node.
+        curr->Open(WRITE);
+        node->val_ = val;
+        retval = true;
+    }else {
+        retval = false;
+    }
+    PTM_COMMIT;
+    return retval;
+}
+
+int LinkedList::Insert(Key_t key, Value_t val) {
     PTM_START(RDWR);
     // std::cout <<"insert: " << val << std::endl;
     PtmObjectWrapper<PONode> *prev = sentinel_;
@@ -108,40 +134,41 @@ void LinkedList::Insert(Value_t val) {
     curr->Open(WRITE);
     po_node = prev->Open(WRITE);
     PtmObjectWrapper<PONode> *new_po_node_wrapper = new PtmObjectWrapper<PONode>();
-    PONode *new_po_node = new_po_node_wrapper->Open(INIT);
+    PONode *new_po_node = new_po_node_wrapper->Open(WRITE);
     new_po_node->val_ = val;
     new_po_node->next_ = curr;
     po_node->next_ = new_po_node_wrapper;
     PTM_COMMIT;
+    return 1;
 }
 
-bool LinkedList::Delete(Value_t val) {
+int LinkedList::Delete(Key_t key) {
     PTM_START(RDWR);
-    bool retval = true;
-    // std::cout <<"delete: " << val << std::endl;
+    bool ret = 0;
+    // std::cout <<"delete: " << key << std::endl;
     PONode *tmp;
     PtmObjectWrapper<PONode> *prev = sentinel_;
     PONode *node = sentinel_->Open(READ);
     PtmObjectWrapper<PONode> *curr = node->next_;
     node = curr->Open(READ);
-    while(curr != sentinel_ && val > node->val_) {
+    while(curr != sentinel_ && key > node->val_) {
         // std::cout << "delete" << std::endl;
         prev = curr;
         curr = node->next_;
         node = curr->Open(READ);
     }
-    if(val == node->val_) {
+    if(key == node->val_) {
         // NOTE: we do not consider releasing the deleted node.
         curr->Open(WRITE);
         node->next_->Open(WRITE);
         tmp = prev->Open(WRITE);
         tmp->next_ = node->next_;
-        retval = true;
+        ret = 1;
     }else {
-        retval = false;
+        ret = 0;
     }
     PTM_COMMIT;
-    return retval;
+    return ret;
 }
 
 unsigned long long LinkedList::Size() {

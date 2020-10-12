@@ -27,6 +27,14 @@
 #include "intset.h"
 #endif
 
+// #ifndef INTSET_HASH_TABLE_H_
+// #include "hashtable.h"
+// #endif
+
+#ifndef INTSET_LINKEDLIST_H_
+#include "linkedlist.h"
+#endif
+
 #include <assert.h>
 #include <getopt.h>
 #include <limits.h>
@@ -61,39 +69,6 @@ void exit(int status);
 TM_PURE 
 void perror(const char *s);
 #else /* Compile with explicit calls to tinySTM */
-
-// # include "stm.h"
-// # include "mod_mem.h"
-// # include "mod_ab.h"
-
-// /*
-//  * Useful macros to work with transactions. Note that, to use nested
-//  * transactions, one should check the environment returned by
-//  * stm_get_env() and only call sigsetjmp() if it is not null.
-//  */
-// # define TM_START(tid, ro)                  { stm_tx_attr_t _a = {{.id = tid, .read_only = ro}}; \
-//                                               sigjmp_buf *_e = stm_start(_a); \
-//                                               if (_e != NULL) sigsetjmp(*_e, 0); 
-// # define TM_START_TS(ts, label)             { sigjmp_buf *_e = stm_start((stm_tx_attr_t)0); \
-//                                               if (_e != NULL && sigsetjmp(*_e, 0)) goto label; \
-// 	                                      stm_set_extension(0, &ts)
-// # define TM_LOAD(addr)                      stm_load((stm_word_t *)addr)
-// # define TM_UNIT_LOAD(addr, ts)             stm_unit_load((stm_word_t *)addr, ts)
-// # define TM_STORE(addr, value)              stm_store((stm_word_t *)addr, (stm_word_t)value)
-// # define TM_UNIT_STORE(addr, value, ts)     stm_unit_store((stm_word_t *)addr, (stm_word_t)value, ts)
-// # define TM_COMMIT                          stm_commit(); }
-// # define TM_MALLOC(size)                    stm_malloc(size)
-// # define TM_FREE(addr)                      stm_free(addr, sizeof(*addr))
-// # define TM_FREE2(addr, size)               stm_free(addr, size)
-
-// # define TM_INIT                            stm_init(); mod_mem_init(0); mod_ab_init(0, NULL)
-// # define TM_EXIT                            stm_exit()
-// # define TM_INIT_THREAD                     stm_init_thread()
-// # define TM_EXIT_THREAD                     stm_exit_thread()
-
-// /* Annotations used in this benchmark */
-// # define TM_SAFE
-// # define TM_PURE
 
 #endif /* Compile with explicit calls to tinySTM */
 
@@ -153,26 +128,26 @@ typedef struct thread_data {
   char padding[64];
 } thread_data_t;
 
-#ifndef INTSET_LINKEDLIST_H_
-#include "linkedlist.h"
-#endif
-
 int set_add(AbstractIntset *set, Value_t val, void *not_used_for_now) {
-    set->Insert(val);
-    return 1;
+    return set->Insert(val, val);
 }
 
 int set_remove(AbstractIntset *set, Value_t val, void *not_used_for_now) {
-    set->Delete(val);
-    return 1;
+    return set->Delete(val);
 }
 
 int set_contains(AbstractIntset *set, Value_t val, void *not_used_for_now) {
-    return (int)set->Search(val);
+    return (int)set->Get(val);
 }
 
 AbstractIntset *set_new() {
-    return new LinkedList();
+#ifdef INTSET_HASH_TABLE_H_
+    return new HashTable();
+#else
+#ifdef INTSET_LINKEDLIST_H_
+  return new LinkedList();
+#endif
+#endif
 }
 
 unsigned long long set_size(AbstractIntset *intset) {
@@ -319,13 +294,13 @@ int main(int argc, char **argv)
   barrier_t barrier;
   struct timeval start, end;
   struct timespec timeout;
-  int duration = DEFAULT_DURATION;
-  int initial = DEFAULT_INITIAL;
-  int nb_threads = DEFAULT_NB_THREADS;
-  int range = DEFAULT_RANGE;
-  int seed = DEFAULT_SEED;
-  int update = DEFAULT_UPDATE;
-  int alternate = 1;
+  unsigned long duration = DEFAULT_DURATION;
+  unsigned long initial = DEFAULT_INITIAL;
+  unsigned long nb_threads = DEFAULT_NB_THREADS;
+  unsigned long range = DEFAULT_RANGE;
+  unsigned long seed = DEFAULT_SEED;
+  unsigned long update = DEFAULT_UPDATE;
+  unsigned alternate = 1;
 #ifndef TM_COMPILER
   char *cm = NULL;
 #endif /* ! TM_COMPILER */
@@ -455,12 +430,12 @@ int main(int argc, char **argv)
 #ifndef TM_COMPILER
   printf("CM           : %s\n", (cm == NULL ? "DEFAULT" : cm));
 #endif /* ! TM_COMPILER */
-  printf("Duration     : %d\n", duration);
-  printf("Initial size : %d\n", initial);
-  printf("Nb threads   : %d\n", nb_threads);
-  printf("Value range  : %d\n", range);
-  printf("Seed         : %d\n", seed);
-  printf("Update rate  : %d\n", update);
+  printf("Duration     : %ld\n", duration);
+  printf("Initial size : %ld\n", initial);
+  printf("Nb threads   : %ld\n", nb_threads);
+  printf("Value range  : %ld\n", range);
+  printf("Seed         : %ld\n", seed);
+  printf("Update rate  : %ld\n", update);
   printf("Alternate    : %d\n", alternate);
 #ifdef USE_LINKEDLIST
   printf("Unit tx      : %d\n", unit_tx);
@@ -498,7 +473,7 @@ int main(int argc, char **argv)
     printf("WARNING: range is not twice the initial set size\n");
 
   /* Populate set */
-  printf("Adding %d entries to set\n", initial);
+  printf("Adding %ld entries to set\n", initial);
   i = 0;
   while (i < initial) {
     val = rand_range(range, main_seed) + 1;
@@ -578,7 +553,7 @@ int main(int argc, char **argv)
   }
   printf("Set size      : %lld (expected: %d)\n", set_size(set), size);
   ret = (set_size(set) != size);
-  printf("Duration      : %d (ms)\n", duration);
+  printf("Duration      : %ld (ms)\n", duration);
   printf("#txs          : %lu (%f / s)\n", reads + updates, (reads + updates) * 1000.0 / duration);
   printf("#read txs     : %lu (%f / s)\n", reads, reads * 1000.0 / duration);
   printf("#update txs   : %lu (%f / s)\n", updates, updates * 1000.0 / duration);

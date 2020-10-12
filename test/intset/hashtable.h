@@ -3,9 +3,17 @@
 
 // hashtable is implemented with linked lists
 
-#ifndef STH_H_
-#include "sth.h"
+#ifndef STH_INTERFACE_TL2_H_
+#include "sth_interface_TL2.h"
 #endif
+
+// #ifndef ORIGINAL_INTERFACE_TL2_H_
+// #include "original_interface_TL2.h"
+// #endif
+
+// #ifndef ORDO_INTERFACE_TL2_H_
+// #include "ordo_interface_TL2.h"
+// #endif
 
 #ifndef INTSET_H_
 #include "intset.h"
@@ -19,7 +27,7 @@
 /*
  * hash table entry
  */
-class Entry: public AbstractPtmObject {
+class Entry: public PtmObjectInterface {
 public:
     Key_t key_;
     Value_t val_;
@@ -28,14 +36,14 @@ public:
     Entry() : key_(INVALID), val_(0), next_(nullptr) {};
     Entry(Key_t key, Value_t val) : key_(key), val_(val), next_(nullptr) {};
     ~Entry() {};
-    AbstractPtmObject *Clone() {
+    PtmObjectInterface *Clone() {
         Entry *entry = new Entry();
         entry->val_ = val_;
         entry->key_ = key_;
         entry->next_ = next_;
         return entry;
     }
-    void Copy(AbstractPtmObject *ptm_object) {
+    void Copy(PtmObjectInterface *ptm_object) {
         Entry *entry = (Entry *)ptm_object;
         key_ = entry->key_;
         val_ = entry->val_;
@@ -48,27 +56,28 @@ public:
  * ./intset-ht -i 100000 -r 1000000 -u 0 -n 1 
  */
 
-class HashTable {
+class HashTable : public AbstractIntset {
 public:
     HashTable() {
-        capacity_ = 1000000;     // 1000k
+        capacity_ = 1000000;     // 10k
         dict_ = new PtmObjectWrapper<Entry>*[capacity_];
-        PTM_START(RDWR);
         for(int i=0; i<capacity_; i++) {
+            PTM_START(RDWR);
             PtmObjectWrapper<Entry> *tmp = new PtmObjectWrapper<Entry>();
-            Entry *entry = tmp->Open(INIT);
+            Entry *entry = tmp->Open(WRITE);
             entry->key_ = INVALID;
             entry->next_ = nullptr;
             dict_[i] = tmp;
+            PTM_COMMIT;
         }
-        PTM_COMMIT;
     }
     ~HashTable() {
         // do not care
     }
     Value_t Get(Key_t key);
-    void Insert(Key_t key, Value_t val);
-    bool Delete(Key_t key);
+    bool Update(Key_t key, Value_t val);
+    int Insert(Key_t key, Value_t val);
+    int Delete(Key_t key);
     unsigned long long Size();
 
   private:
@@ -83,6 +92,7 @@ Value_t HashTable::Get(Key_t key) {
     // std::cout << "get" << std::endl;
     auto key_hash = h(&key, sizeof(key));
     auto loc = key_hash % capacity_;
+    // std::cout << loc << std::endl;
     PtmObjectWrapper<Entry> *curr = dict_[loc];
     while (curr != nullptr) {
         Entry *entry = curr->Open(READ);
@@ -97,7 +107,39 @@ Value_t HashTable::Get(Key_t key) {
     return retval;
 }
 
-void HashTable::Insert(Key_t key, Value_t val) {
+bool HashTable::Update(Key_t key, Value_t val) {
+    PTM_START(RDWR);
+    bool ret = false;
+    auto key_hash = h(&key, sizeof(key));
+    auto loc = key_hash % capacity_;
+    PtmObjectWrapper<Entry> *curr = dict_[loc];
+    Entry *entry = curr->Open(READ);
+    if (entry->key_ == key) { 
+        Entry *entry = curr->Open(WRITE);
+        entry->key_ = val;
+        ret = true;
+    } else {
+        // search linked list
+        PtmObjectWrapper<Entry> *prev = curr;
+        curr = entry->next_;
+        while (curr != nullptr) {
+            Entry *entry = curr->Open(READ);
+            if(entry->key_ == key) {
+                entry = curr->Open(WRITE);
+                entry->val_ = val;
+                ret = true;
+                break;
+            }else {
+                prev = curr;
+                curr = entry->next_;
+            }
+        }
+    }
+    PTM_COMMIT;
+    return ret;
+}
+
+int HashTable::Insert(Key_t key, Value_t val) {
     PTM_START(RDWR);
     // std::cout << "insert" << std::endl;
     auto key_hash = h(&key, sizeof(key));
@@ -111,7 +153,7 @@ void HashTable::Insert(Key_t key, Value_t val) {
     }else {
         // we need alloc a new entry
         PtmObjectWrapper<Entry> *new_entry_wrapper = new PtmObjectWrapper<Entry>();
-        Entry *new_entry = new_entry_wrapper->Open(INIT);
+        Entry *new_entry = new_entry_wrapper->Open(WRITE);
         new_entry->key_ = key;
         new_entry->val_ = val;
         new_entry->next_ = entry->next_;
@@ -119,29 +161,35 @@ void HashTable::Insert(Key_t key, Value_t val) {
         // std::cout << "not first" << std::endl;
     }
     PTM_COMMIT;
+    return 1;
 }
 
-bool HashTable::Delete(Key_t key) {
+int HashTable::Delete(Key_t key) {
     PTM_START(RDWR);
-    bool ret = false;
+    bool ret = 0;
     // std::cout << "delete" << std::endl;
     auto key_hash = h(&key, sizeof(key));
     auto loc = key_hash % capacity_;
     PtmObjectWrapper<Entry> *curr = dict_[loc];
-    Entry *entry = curr->Open(WRITE);
+    Entry *entry = curr->Open(READ);
     if (entry->key_ == key) { 
+        Entry *entry = curr->Open(WRITE);
         entry->key_ = INVALID;
-        ret = true;
+        ret = 1;
     } else {
         // search linked list
         PtmObjectWrapper<Entry> *prev = curr;
         curr = entry->next_;
         while (curr != nullptr) {
-            Entry *entry = curr->Open(WRITE);
+            Entry *entry = curr->Open(READ);
             if(entry->key_ == key) {
                 Entry *prev_entry = prev->Open(WRITE);
+                entry = curr->Open(WRITE);
+                // this is a must when adding Update
+                if (entry->next_ != nullptr)
+                    entry->next_->Open(WRITE);
                 prev_entry->next_ = entry->next_;
-                ret = true;
+                ret = 1;
                 break;
             }else {
                 prev = curr;

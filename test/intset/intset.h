@@ -42,11 +42,10 @@ struct Pair {
 
 class AbstractIntset {
 public:
-    // if val exists, return true, or false
-    virtual bool Search(Value_t val) = 0;
-    virtual void Insert(Value_t val) = 0;
-    // if val exists and is deleted successfully, return ture
-    virtual bool Delete(Value_t val) = 0;
+    virtual Value_t Get(Key_t key) = 0;
+    virtual bool Update(Key_t key, Value_t val) = 0;
+    virtual int Insert(Key_t key, Value_t val) = 0;
+    virtual int Delete(Key_t key) = 0;
     virtual unsigned long long Size() = 0;
     virtual ~AbstractIntset() {};
 };
