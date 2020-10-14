@@ -13,19 +13,19 @@ OBJDIR = ../obj
 JUNK = *~ $(OBJDIR)/*.o $(OBJDIR)/*.a $(OBJDIR)/*_ut  *-test *-*
 
 # tests
-run-all-test: ll-test
+run-all-test:
 
-intset-test:  $(OBJDIR)/intset_test.o 
+intset-test:  $(OBJDIR)/intset_test.o
 	$(LD) $(CFLAGS) -o $@ $^ $(LIBS)
 
-ll-test:  $(OBJDIR)/linkedlist_test.o 
+debug:  $(OBJDIR)/debug.o
 	$(LD) $(CFLAGS) -o $@ $^ $(LIBS)
 
 $(OBJDIR)/intset_test.o: intset_test.cc
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-$(OBJDIR)/linkedlist_test.o: linkedlist_test.cc
+$(OBJDIR)/debug.o: debug.cc
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:
-	rm -f  test $(JUNK) 
+	rm -f  test $(JUNK)
