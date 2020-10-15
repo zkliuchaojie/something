@@ -76,7 +76,7 @@ public:
         // init sentinel_
         sentinel_ = new PtmObjectWrapper<PONode>();
         PONode *sentinel_node = sentinel_->Open(WRITE);
-        sentinel_node->left_ = nil_;    // thsi is root
+        sentinel_node->left_ = nil_;    // this is root
         sentinel_node->right_ = nullptr;
         sentinel_node->parent_ = nullptr;
         sentinel_node->color_ = BLACK;
@@ -96,6 +96,9 @@ public:
     unsigned long long Size();
 
 private:
+    void Insert_Fixup(PtmObjectWrapper<PONode> *curr_wrapper);
+    void Left_Rotate(PtmObjectWrapper<PONode> *wrapper);
+    void right_Rotate(PtmObjectWrapper<PONode> *wrapper);
     void Transplant(PONode *old_parent,
                 PtmObjectWrapper<PONode> *old_wrapper,
                 PONode *old,
@@ -123,6 +126,40 @@ Value_t Rbt::Get(Key_t key) {
     return retval;
 }
 
+/*
+ *
+ */
+void Rbt::Insert_Fixup(PtmObjectWrapper<PONode> *curr_wrapper) {
+    PONode *curr = curr_wrapper->Open(WRITE);
+    PtmObjectWrapper<PONode> *parent_wrapper = curr->parent_;
+    PONode *parent = parent_wrapper->Open(WRITE);
+    while (parent->color_ == RED) {
+        PONode *parent_parent = parent->parent_->Open(READ);
+        if (parent_wrapper == parent_parent->left_) {
+            PONode *y = parent_parent->right_->Open(WRITE);
+            if (y->color_ == RED) {
+                parent->color_ = BLACK;
+                y->color_ = BLACK;
+                parent_parent->color_ = RED;
+                curr_wrapper = parent->parent_;
+            } else {
+                if (curr_wrapper == parent->right_) {
+                    curr_wrapper = curr->parent_;
+                    Left_Rotate(curr_wrapper);
+                }
+                parent->color_ = BLACK;
+                parent_parent->color_ = RED;
+                right_Rotate(parent->parent_);
+            }
+        } else {
+
+        }
+        curr = curr_wrapper->Open(WRITE);
+        parent_wrapper = curr->parent_;
+        parent = parent_wrapper->Open(WRITE);
+    }
+}
+
 int Rbt::Insert(Key_t key, Value_t val) {
     PTM_START(RDWR);
     PtmObjectWrapper<PONode> *curr_wrapper = sentinel_;
@@ -144,9 +181,10 @@ int Rbt::Insert(Key_t key, Value_t val) {
     PtmObjectWrapper<PONode> *new_po_node_wrapper = new PtmObjectWrapper<PONode>();
     PONode *new_po_node = new_po_node_wrapper->Open(WRITE);
     new_po_node->val_ = val;
-    new_po_node->left_ = nullptr;
-    new_po_node->right_ = nullptr;
+    new_po_node->left_ = nil_;
+    new_po_node->right_ = nil_;
     new_po_node->parent_ = saved_curr_wrapper;
+    new_po_node->color_ = RED;
     curr = saved_curr_wrapper->Open(WRITE);
     if (saved_curr_wrapper == sentinel_) {
         curr->left_ = new_po_node_wrapper;
@@ -157,6 +195,9 @@ int Rbt::Insert(Key_t key, Value_t val) {
             curr->left_ = new_po_node_wrapper;
         }
     }
+
+    Insert_Fixup(new_po_node_wrapper);
+
     PTM_COMMIT;
     return 1;
 }
