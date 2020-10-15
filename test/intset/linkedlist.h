@@ -61,8 +61,8 @@ public:
     }
     // if exists, return 1, else return 0
     Value_t Get(Key_t key);
-    // key is equal to val
-    bool Update(Key_t key, Value_t val);
+    // do not support update operation
+    bool Update(Key_t key, Value_t val) {return false;}
     // key is equal to val
     int Insert(Key_t key, Value_t val);
     int Delete(Key_t key);
@@ -83,33 +83,6 @@ Value_t LinkedList::Get(Key_t key) {
         }else {
             po_node_wrapper = node->next_;
         }
-    }
-    PTM_COMMIT;
-    return retval;
-}
-
-bool LinkedList::Update(Key_t key, Value_t val) {
-    PTM_START(RDWR);
-    bool retval = false;
-    // std::cout <<"delete: " << key << std::endl;
-    PONode *tmp;
-    PtmObjectWrapper<PONode> *prev = sentinel_;
-    PONode *node = sentinel_->Open(READ);
-    PtmObjectWrapper<PONode> *curr = node->next_;
-    node = curr->Open(READ);
-    while(curr != sentinel_ && val > node->val_) {
-        // std::cout << "delete" << std::endl;
-        prev = curr;
-        curr = node->next_;
-        node = curr->Open(READ);
-    }
-    if(val == node->val_) {
-        // NOTE: we do not consider releasing the deleted node.
-        curr->Open(WRITE);
-        node->val_ = val;
-        retval = true;
-    }else {
-        retval = false;
     }
     PTM_COMMIT;
     return retval;
