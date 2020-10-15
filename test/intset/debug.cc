@@ -6,13 +6,13 @@
 // #include "hashtable.h"
 // #endif
 
-#ifndef INTSET_LINKEDLIST_H_
-#include "linkedlist.h"
-#endif
-
-// #ifndef INTSET_BST_H_
-// #include "bst.h"
+// #ifndef INTSET_LINKEDLIST_H_
+// #include "linkedlist.h"
 // #endif
+
+#ifndef INTSET_BST_H_
+#include "bst.h"
+#endif
 
 #include <iostream>
 #include <thread>

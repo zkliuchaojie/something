@@ -89,8 +89,9 @@ Value_t Bst::Get(Key_t key) {
     Value_t retval = 0;
     PONode *sentinel_node = sentinel_->Open(READ);
     PtmObjectWrapper<PONode> *curr_wrapper = sentinel_node->left_;
+    PONode *curr;
     while (curr_wrapper != nullptr) {
-        PONode *curr = curr_wrapper->Open(READ);
+        curr = curr_wrapper->Open(READ);
         if (key == curr->val_) {
             retval = 1;
             break;
@@ -106,17 +107,20 @@ Value_t Bst::Get(Key_t key) {
 
 int Bst::Insert(Key_t key, Value_t val) {
     PTM_START(RDWR);
-    PtmObjectWrapper<PONode> *parent = sentinel_;
-    PONode *curr = sentinel_->Open(WRITE);
-
-    PtmObjectWrapper<PONode> *curr_wrapper = curr->left_;
-    while (curr_wrapper != NULL) {
-        parent = curr_wrapper;
-        curr = curr_wrapper->Open(WRITE);
-        if (key > curr->val_) {
-            curr_wrapper = curr->right_;
-        } else {
+    PtmObjectWrapper<PONode> *curr_wrapper = sentinel_;
+    PtmObjectWrapper<PONode> *saved_curr_wrapper = curr_wrapper;
+    PONode *curr;
+    while (curr_wrapper != nullptr) {
+        curr = curr_wrapper->Open(READ);
+        saved_curr_wrapper = curr_wrapper;
+        if (saved_curr_wrapper == sentinel_) {
             curr_wrapper = curr->left_;
+        } else {
+            if (key > curr->val_) {
+                curr_wrapper = curr->right_;
+            } else {
+                curr_wrapper = curr->left_;
+            }
         }
     }
     PtmObjectWrapper<PONode> *new_po_node_wrapper = new PtmObjectWrapper<PONode>();
@@ -124,8 +128,9 @@ int Bst::Insert(Key_t key, Value_t val) {
     new_po_node->val_ = val;
     new_po_node->left_ = nullptr;
     new_po_node->right_ = nullptr;
-    new_po_node->parent_ = parent;
-    if (parent == sentinel_) {
+    new_po_node->parent_ = saved_curr_wrapper;
+    curr = saved_curr_wrapper->Open(WRITE);
+    if (saved_curr_wrapper == sentinel_) {
         curr->left_ = new_po_node_wrapper;
     } else {
         if (key > curr->val_) {
@@ -145,10 +150,6 @@ void Bst::Transplant(PONode *old_parent,
                 PtmObjectWrapper<PONode> *old_wrapper,
                 PONode *old, 
                 PtmObjectWrapper<PONode> *new_wrapper) {
-    if (old->parent_ == sentinel_) {
-        PONode *sentinel_node = sentinel_->Open(WRITE);
-        sentinel_node->left_ = new_wrapper;
-    }
     if (old_parent->left_ == old_wrapper) {
         old_parent->left_ = new_wrapper;
     } else {
@@ -192,8 +193,8 @@ int Bst::Delete(Key_t key) {
                 successor_wrapper = successor->left_;
                 successor = successor_wrapper->Open(READ);
             }
+            successor = successor_wrapper->Open(WRITE);
             if (curr->right_ != successor_wrapper) {
-                successor = successor_wrapper->Open(WRITE);
                 PONode *successor_parent = successor->parent_->Open(WRITE);
                 Transplant(successor_parent, successor_wrapper, successor, successor->right_);
                 successor->right_ = curr->right_;
@@ -223,7 +224,6 @@ unsigned long long Bst::Size() {
         q.pop();
         if (wrapper != nullptr) {
             retval++;
-            std::cout << retval << std::endl;
             PONode *node = wrapper->Open(READ);
             q.push(node->left_);
             q.push(node->right_);

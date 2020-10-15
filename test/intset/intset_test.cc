@@ -31,8 +31,12 @@
 // #include "hashtable.h"
 // #endif
 
-#ifndef INTSET_LINKEDLIST_H_
-#include "linkedlist.h"
+// #ifndef INTSET_LINKEDLIST_H_
+// #include "linkedlist.h"
+// #endif
+
+#ifndef INTSET_BST_H_
+#include "bst.h"
 #endif
 
 #include <assert.h>
@@ -146,6 +150,10 @@ AbstractIntset *set_new() {
 #else
 #ifdef INTSET_LINKEDLIST_H_
   return new LinkedList();
+#else
+#ifdef INTSET_BST_H_
+  return new Bst();
+#endif
 #endif
 #endif
 }
