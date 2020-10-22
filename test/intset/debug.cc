@@ -10,8 +10,12 @@
 // #include "linkedlist.h"
 // #endif
 
-#ifndef INTSET_BST_H_
-#include "bst.h"
+// #ifndef INTSET_BST_H_
+// #include "bst.h"
+// #endif
+
+#ifndef INTSET_RBT_H_
+#include "rbt.h"
 #endif
 
 #include <iostream>
@@ -22,10 +26,10 @@
 #include <time.h>
 #include <unistd.h>
 
-#define NR_OPERATIONS   2048
+#define NR_OPERATIONS   100000
 #define INPUT_FILE      "data"      // using input_gen.cpp to generate data file
 
-#define NR_THREADS      1           // must be equal or less nr_cpus
+#define NR_THREADS      4           // must be equal or less nr_cpus
 #define NR_RECOVERY_THREADS     1   //the default value
 
 bool stop = 0;
@@ -89,10 +93,14 @@ AbstractIntset *set_new() {
     return new HashTable();
 #else
 #ifdef INTSET_LINKEDLIST_H_
-  return new LinkedList();
+    return new LinkedList();
 #else
 #ifdef INTSET_BST_H_
-  return new Bst();
+    return new Bst();
+#else
+#ifdef INTSET_RBT_H_
+    return new Rbt();
+#endif
 #endif
 #endif
 #endif
