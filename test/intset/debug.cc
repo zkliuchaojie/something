@@ -1,5 +1,21 @@
-#ifndef INTSET_LINKEDLIST_H_
-#include "linkedlist.h"
+#ifndef INTSET_H_
+#include "intset.h"
+#endif
+
+// #ifndef INTSET_HASH_TABLE_H_
+// #include "hashtable.h"
+// #endif
+
+// #ifndef INTSET_LINKEDLIST_H_
+// #include "linkedlist.h"
+// #endif
+
+// #ifndef INTSET_BST_H_
+// #include "bst.h"
+// #endif
+
+#ifndef INTSET_RBT_H_
+#include "rbt.h"
 #endif
 
 #include <iostream>
@@ -10,10 +26,10 @@
 #include <time.h>
 #include <unistd.h>
 
-#define NR_OPERATIONS   10000
+#define NR_OPERATIONS   100000
 #define INPUT_FILE      "data"      // using input_gen.cpp to generate data file
 
-#define NR_THREADS      1           // must be equal or less nr_cpus
+#define NR_THREADS      4           // must be equal or less nr_cpus
 #define NR_RECOVERY_THREADS     1   //the default value
 
 bool stop = 0;
@@ -26,26 +42,26 @@ double mysecond() {
     return ( (double)tp.tv_sec + (double)tp.tv_usec*1.e-6);
 }
 
-void insert(LinkedList *ll, Value_t *values, int cur_nr_threads) {
+void insert(AbstractIntset *set, Value_t *values, int cur_nr_threads) {
     for(int i=0; !stop && i<NR_OPERATIONS/cur_nr_threads; i++) {
-        ll->Insert(values[i]);
+        set->Insert(values[i], values[i]);
     }
 }
 
-void search(LinkedList *ll, Value_t *values, int cur_nr_threads) {
+void search(AbstractIntset *set, Value_t *values, int cur_nr_threads) {
     bool tmp_value;
     for(int i=0; !stop && i<NR_OPERATIONS/cur_nr_threads; i++) {
-        tmp_value = ll->Search(values[i]);
+        tmp_value = set->Get(values[i]);
         if(__glibc_unlikely(tmp_value != true)){
             std::cout << "search failed, value: " << values[i] << std::endl;
         }
     }
 }
 
-void _delete(LinkedList *ll, Value_t *values, int cur_nr_threads) {
+void _delete(AbstractIntset *set, Value_t *values, int cur_nr_threads) {
     bool is_delete_success;
     for(int i=0; !stop && i<NR_OPERATIONS/cur_nr_threads; i++) {
-        is_delete_success = ll->Delete(values[i]);
+        is_delete_success = set->Delete(values[i]);
         if(__glibc_unlikely(is_delete_success == false)){
             std::cout << "delele failed, key: " << (unsigned long)values[i] << std::endl;
         }
@@ -72,6 +88,24 @@ void clear_cache() {
     delete[] dummy;
 }
 
+AbstractIntset *set_new() {
+#ifdef INTSET_HASH_TABLE_H_
+    return new HashTable();
+#else
+#ifdef INTSET_LINKEDLIST_H_
+    return new LinkedList();
+#else
+#ifdef INTSET_BST_H_
+    return new Bst();
+#else
+#ifdef INTSET_RBT_H_
+    return new Rbt();
+#endif
+#endif
+#endif
+#endif
+}
+
 int main() {
     // register_printcs_with_signal(SIGSEGV);
     // get keys and values from file
@@ -88,62 +122,62 @@ int main() {
     int nr_cpus = get_nprocs_conf();
     std::thread *threads[nr_cpus];
     times = new double [2];
-    LinkedList *ll;
+    AbstractIntset *set;
     //test insert
     std::cout << "test insert: " << std::endl;
     for(int thread_idx=0; thread_idx<NR_THREADS; thread_idx++) {
-        ll = new LinkedList();
+        set = set_new();
         times[0] = mysecond();
         for(long long int i=0; i<=thread_idx; i++)
-            threads[i] = new std::thread(insert, ll, values+i*NR_OPERATIONS/(thread_idx+1),
+            threads[i] = new std::thread(insert, set, values+i*NR_OPERATIONS/(thread_idx+1),
                  thread_idx+1);
         for(int i=0; i<=thread_idx; i++)
             threads[i]->join();
         times[1] = mysecond();
-        print_result(thread_idx, ll);
-        delete ll;
+        print_result(thread_idx, set);
+        delete set;
     }
     // test get
     std::cout << "test get: " << std::endl;
     for(int thread_idx=0; thread_idx<NR_THREADS; thread_idx++) {
-        ll = new LinkedList();
+        set = set_new();
         // insert data first
         for(long long int i=0; i<=thread_idx; i++)
-            threads[i] = new std::thread(insert, ll, values+i*NR_OPERATIONS/(thread_idx+1),
+            threads[i] = new std::thread(insert, set, values+i*NR_OPERATIONS/(thread_idx+1),
                 thread_idx+1);
         for(int i=0; i<=thread_idx; i++)
             threads[i]->join();
 
         times[0] = mysecond();
         for(long long int i=0; i<=thread_idx; i++)
-            threads[i] = new std::thread(search, ll, values+i*NR_OPERATIONS/(thread_idx+1),
+            threads[i] = new std::thread(search, set, values+i*NR_OPERATIONS/(thread_idx+1),
                 thread_idx+1);
         for(int i=0; i<=thread_idx; i++)
             threads[i]->join();
         times[1] = mysecond();
-        print_result(thread_idx, ll);
-        delete ll;
+        print_result(thread_idx, set);
+        delete set;
     }
     // test _delete
     std::cout << "test _delete: " << std::endl;
     for(int thread_idx=0; thread_idx<NR_THREADS; thread_idx++) {
-        ll = new LinkedList();
+        set = set_new();
         // insert data first
         for(long long int i=0; i<=thread_idx; i++)
-            threads[i] = new std::thread(insert, ll, values+i*NR_OPERATIONS/(thread_idx+1),
+            threads[i] = new std::thread(insert, set, values+i*NR_OPERATIONS/(thread_idx+1),
                  thread_idx+1);
         for(int i=0; i<=thread_idx; i++)
             threads[i]->join();
 
         times[0] = mysecond();
         for(long long int i=0; i<=thread_idx; i++)
-            threads[i] = new std::thread(_delete, ll, values+i*NR_OPERATIONS/(thread_idx+1),
+            threads[i] = new std::thread(_delete, set, values+i*NR_OPERATIONS/(thread_idx+1),
                thread_idx+1);
         for(int i=0; i<=thread_idx; i++)
             threads[i]->join();
         times[1] = mysecond();
-        print_result(thread_idx, ll);
-        delete ll;
+        print_result(thread_idx, set);
+        delete set;
     }
     return 0;
 }

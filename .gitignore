@@ -1,0 +1,6 @@
+# cpp
+*.o
+*.a
+
+# Output
+*-test

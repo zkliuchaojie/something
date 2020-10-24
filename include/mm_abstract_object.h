@@ -11,8 +11,11 @@ class MMAbstractObject {
 public:
     Partition *__owner_partition_;
     MMAbstractObject *__next_;
-    MMAbstractObject() : __owner_partition_(nullptr), __next_(nullptr) {};
+    void *__mm_pool_;   // recording which pool it belongs to.
+    MMAbstractObject() : __owner_partition_(nullptr), \
+    __next_(nullptr), __mm_pool_(nullptr) {};
     virtual ~MMAbstractObject() {};
+    //virtual void Destroy(void *object) = 0;
 };
 
 #endif
