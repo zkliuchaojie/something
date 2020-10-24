@@ -27,9 +27,9 @@
 #include "intset.h"
 #endif
 
-// #ifndef INTSET_HASH_TABLE_H_
-// #include "hashtable.h"
-// #endif
+#ifndef INTSET_HASH_TABLE_H_
+#include "hashtable.h"
+#endif
 
 // #ifndef INTSET_LINKEDLIST_H_
 // #include "linkedlist.h"
@@ -39,9 +39,11 @@
 // #include "bst.h"
 // #endif
 
+/*
 #ifndef INTSET_RBT_H_
 #include "rbt.h"
 #endif
+*/
 
 #include <assert.h>
 #include <getopt.h>
@@ -125,6 +127,9 @@ typedef struct thread_data {
   unsigned long nb_found;
   unsigned long nb_abort;
   unsigned long nb_read_abort;
+#ifdef ORIGINAL_INTERFACE_TL2_H_
+  double nb_global_clock_overhead;
+#endif
   unsigned short seed[3];
   int diff;
   int range;
@@ -267,6 +272,9 @@ static void *test(void *data)
   }
   d->nb_abort = thread_abort_counter;
   d->nb_read_abort = thread_read_abort_counter;
+#ifdef ORIGINAL_INTERFACE_TL2_H_
+  d->nb_global_clock_overhead = thread_global_clock_overhead;
+#endif
   PTM_THREAD_CLEAN;
   return NULL;
 }
@@ -517,6 +525,9 @@ int main(int argc, char **argv)
     data[i].nb_found = 0;
     data[i].nb_abort = 0;
     data[i].nb_read_abort = 0;
+  #ifdef ORIGINAL_INTERFACE_TL2_H_
+    data[i].nb_global_clock_overhead = 0;
+  #endif
     data[i].diff = 0;
     rand_init(data[i].seed);
     data[i].set = set;
@@ -563,6 +574,9 @@ int main(int argc, char **argv)
     printf("  #found      : %lu\n", data[i].nb_found);
     printf("  #abort      : %lu\n", data[i].nb_abort);
     printf("  #read abort : %lu\n", data[i].nb_read_abort);
+#ifdef ORIGINAL_INTERFACE_TL2_H_
+    printf("  #global clock overhead: %f\n", data[i].nb_global_clock_overhead);
+#endif
     reads += data[i].nb_contains;
     updates += (data[i].nb_add + data[i].nb_remove);
     size += data[i].diff;

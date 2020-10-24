@@ -12,6 +12,7 @@
 #include <string.h>
 #include <setjmp.h>
 #include <thread>
+#include <sys/time.h>
 
 #define PTM_THREAD_CLEAN do { \
     ; \
@@ -185,6 +186,14 @@ public:
 thread_local Transaction thread_tx;
 thread_local unsigned long long thread_read_abort_counter = 0;
 thread_local unsigned long long thread_abort_counter = 0;
+thread_local double thread_global_clock_overhead = 0;
+
+double mysecond() {
+    struct timeval tp;
+    int i;
+    i = gettimeofday(&tp, NULL);
+    return ((double)tp.tv_sec + (double)tp.tv_usec*1.e-6);
+}
 
 /*
  * ptm object wrapper
@@ -285,7 +294,9 @@ static void sth_ptm_commit() {
             thread_tx.w_set_->Unlock();
             sth_ptm_abort();
         }
+        double start = mysecond();
         unsigned long long commit_ts = ATOMIC_ADD_FETCH(&global_clock, 1);
+        thread_global_clock_overhead += mysecond() - start;
         thread_tx.w_set_->CommitWrites(commit_ts);
         thread_tx.w_set_->Unlock();
     }
