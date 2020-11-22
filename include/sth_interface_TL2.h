@@ -284,7 +284,7 @@ static void InitTransaction() {
     thread_tx.r_set_->Clear();
     thread_tx.w_set_->Clear();
     for(int i=0; i<kMaxThreadNum; i++) {
-        thread_tx.ends_[i] = thread_tx.latest_[i];
+        thread_tx.ends_[i] = thread_clocks_[i];
     }
 }
 
@@ -302,10 +302,10 @@ static void sth_ptm_commit() {
             thread_tx.w_set_->Unlock();
             sth_ptm_abort();
         }
-        unsigned long long commit_ts = thread_tx.thread_clock_ + 1;
+        unsigned long long commit_ts = *thread_tx.thread_clock_ + 1;
         thread_tx.w_set_->CommitWrites(TI_AND_TS(thread_tx.thread_id_, commit_ts));
         thread_tx.w_set_->Unlock();
-        thread_tx.thread_clock_ = commit_ts;
+        *thread_tx.thread_clock_ = commit_ts;
     }
 }
 

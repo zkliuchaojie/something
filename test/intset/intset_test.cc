@@ -27,9 +27,9 @@
 #include "intset.h"
 #endif
 
-// #ifndef INTSET_HASH_TABLE_H_
-// #include "hashtable.h"
-// #endif
+#ifndef INTSET_HASH_TABLE_H_
+#include "hashtable.h"
+#endif
 
 // #ifndef INTSET_LINKEDLIST_H_
 // #include "linkedlist.h"
@@ -39,9 +39,9 @@
 // #include "bst.h"
 // #endif
 
-#ifndef INTSET_RBT_H_
-#include "rbt.h"
-#endif
+// #ifndef INTSET_RBT_H_
+// #include "rbt.h"
+// #endif
 
 #include <assert.h>
 #include <getopt.h>

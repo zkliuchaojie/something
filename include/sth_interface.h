@@ -80,6 +80,8 @@ private:
 std::shared_ptr<ThreadIdAllocator> ThreadIdAllocator::thread_id_allocator = nullptr;
 std::mutex ThreadIdAllocator::mutex;
 
+unsigned long long thread_clocks_[kMaxThreadNum] = {1};
+
 /*
  * All ptm objects should inherit this abstract class.
  */
@@ -108,9 +110,8 @@ public:
 class SthTxInterface {
 public:
     int                 thread_id_;
-    unsigned long long  thread_clock_;
+    unsigned long long  *thread_clock_;
     unsigned long long  ends_[kMaxThreadNum];
-    unsigned long long  latest_[kMaxThreadNum];
 
     SthTxInterface() {
         unsigned long long ti_and_ts = ThreadIdAllocator::NewThreadIdAllocatorInstance()->GetThreadIdAndClock();
@@ -118,13 +119,13 @@ public:
             pr_info_and_exit("can not get thread id");
         }
         thread_id_ = TI(ti_and_ts);
-        thread_clock_ = TS(ti_and_ts);
+        thread_clock_ = &(thread_clocks_[thread_id_]);
+        *thread_clock_ = TS(ti_and_ts);
         memset(ends_, 0, sizeof(unsigned long long)*kMaxThreadNum);
-        memset(latest_, 0, sizeof(unsigned long long)*kMaxThreadNum);
     }
     ~SthTxInterface() {
         if (thread_id_ != -1 )
-            ThreadIdAllocator::NewThreadIdAllocatorInstance()->PutThreadIdAndClock(TI_AND_TS(thread_id_, thread_clock_));
+            ThreadIdAllocator::NewThreadIdAllocatorInstance()->PutThreadIdAndClock(TI_AND_TS(thread_id_, *thread_clock_));
     }
 public:
     // if object's timestamp is less or equal to end_[object's tid]
@@ -133,8 +134,6 @@ public:
         if (TS(ti_and_ts) <= ends_[TI(ti_and_ts)]) {
             return true;
         } else {
-            if (TS(ti_and_ts) > latest_[TI(ti_and_ts)])
-                latest_[TI(ti_and_ts)] = TS(ti_and_ts);
             return false;
         }
     }

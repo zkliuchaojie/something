@@ -59,7 +59,7 @@ public:
 class HashTable : public AbstractIntset {
 public:
     HashTable() {
-        capacity_ = 1000000;     // 10k
+        capacity_ = 10000;     // 10k
         dict_ = new PtmObjectWrapper<Entry>*[capacity_];
         for(int i=0; i<capacity_; i++) {
             PTM_START(RDWR);
