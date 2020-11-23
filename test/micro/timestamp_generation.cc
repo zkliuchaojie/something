@@ -1,3 +1,4 @@
+// compile this file with: g++ timestamp_generation.cc -latomic -lpthread 
 #include <iostream>
 #include <thread>
 #include <sys/sysinfo.h>
@@ -101,7 +102,7 @@ int main() {
                 throughput += counters[tid];
             }
         }
-        std::cout << throughput*1.0/5/1000000 << std::endl;
+        std::cout << throughput*1.0/5/10/1000000 << std::endl;
     }
 
     std::cout << "start ORDO test" << std::endl;
@@ -126,7 +127,7 @@ int main() {
                 throughput += counters[tid];
             }
         }
-        std::cout << throughput*1.0/5/1000000 << std::endl;
+        std::cout << throughput*1.0/5/10/1000000 << std::endl;
     }
 
     std::cout << "start Sclock test" << std::endl;
@@ -151,7 +152,7 @@ int main() {
                 throughput += counters[tid];
             }
         }
-        std::cout << throughput*1.0/5/1000000 << std::endl;
+        std::cout << throughput*1.0/5/10/1000000 << std::endl;
     }
     return 0;
 }
