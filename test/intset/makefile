@@ -5,7 +5,7 @@ DEFAULT: test
 CC= g++
 LD = g++
 
-LIBS = -lm -lpthread -lrt -latomic
+LIBS = -lm -lpthread -lrt -latomic -ljemalloc
 CFLAGS = -g -Wall -Wno-unused -Wno-return-type -Wno-sign-compare -std=c++17 -I. -O3
 CFLAGS += -I../../include
 OBJDIR = ../obj
@@ -13,25 +13,19 @@ OBJDIR = ../obj
 JUNK = *~ $(OBJDIR)/*.o $(OBJDIR)/*.a $(OBJDIR)/*_ut  *-test *-*
 
 # tests
-run-all-test: ll-test
+run-all-test:
 
-intset-ll:  $(OBJDIR)/intset_ll_test.o 
+intset-test:  $(OBJDIR)/intset_test.o
 	$(LD) $(CFLAGS) -o $@ $^ $(LIBS)
 
-intset-ht:  $(OBJDIR)/intset_ht_test.o 
+debug:  $(OBJDIR)/debug.o
 	$(LD) $(CFLAGS) -o $@ $^ $(LIBS)
 
-ll-test:  $(OBJDIR)/linkedlist_test.o 
-	$(LD) $(CFLAGS) -o $@ $^ $(LIBS)
-
-$(OBJDIR)/intset_ll_test.o: intset_ll_test.cc
+$(OBJDIR)/intset_test.o: intset_test.cc
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-$(OBJDIR)/intset_ht_test.o: intset_ht_test.cc
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-$(OBJDIR)/linkedlist_test.o: linkedlist_test.cc
+$(OBJDIR)/debug.o: debug.cc
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:
-	rm -f  test $(JUNK) 
+	rm -f  test $(JUNK)
