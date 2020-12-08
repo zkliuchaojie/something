@@ -22,11 +22,9 @@ inline void lfence(void) {
 
 inline void clflush(char* data, size_t len) {
     volatile char *ptr = (char*)((unsigned long)data & (~(kCacheLineSize-1)));
-    mfence();
     for (; ptr < data+len; ptr += kCacheLineSize) {
         asm volatile("clflush %0" : "+m" (*(volatile char*)ptr));
     }
-    mfence();
 }
 
 #endif  // PERSIST_H_

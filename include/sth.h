@@ -104,9 +104,7 @@ public:
 class AbstractPtmObjectWrapper {
 public: 
     virtual bool Validate(unsigned long long version_num) = 0;
-    virtual void CommitWrite(unsigned long long commit_timestamp, AbstractPtmObject *object, TransactionStatus *tx_status) = 0;
-    virtual void IncPos() = 0;
-    virtual void Persist() = 0;
+    virtual void CommitWrite(unsigned long long commit_timestamp, AbstractPtmObject *object) = 0;
     virtual void Unlock() = 0;
     virtual ~AbstractPtmObjectWrapper() {};
 };
@@ -161,19 +159,9 @@ public:
         }
         return true;
     }
-    void CommitWrites(unsigned long long ti_and_ts, TransactionStatus *tx_status) {
+    void CommitWrites(unsigned long long ti_and_ts) {
         for (int i=0; i<entries_num_; i++) {
-            set_[i].ptm_object_wrapper_->CommitWrite(ti_and_ts, set_[i].object_, tx_status);
-        }
-    }
-    void IncPos() {
-        for (int i=0; i<entries_num_; i++) {
-            set_[i].ptm_object_wrapper_->IncPos(); 
-        }
-    }
-    void Persist() {
-        for (int i=0; i<entries_num_; i++) {
-            set_[i].ptm_object_wrapper_->Persist();
+            set_[i].ptm_object_wrapper_->CommitWrite(ti_and_ts, set_[i].object_);
         }
     }
     void Unlock() {
@@ -247,13 +235,14 @@ public:
      */
     int                 thread_id_;
     unsigned long long  thread_clock_;
-    unsigned long long ends_[kMaxThreadNum];
-    unsigned long long latest_[kMaxThreadNum];
+    // persisted_thread_clock_ is used to recovery
+    unsigned long long  persisted_thread_clock_;
+    unsigned long long  ends_[kMaxThreadNum];
+    unsigned long long  latest_[kMaxThreadNum];
     RwSet *r_set_;
     RwSet *w_set_;
     sigjmp_buf *env_;
     TransactionMode mode_;
-    volatile TransactionStatus status_;
 
 public:
     Transaction() {
@@ -270,7 +259,6 @@ public:
         r_set_ = new RwSet();
         w_set_ = new RwSet();
         env_ = (sigjmp_buf *)malloc(sizeof(sigjmp_buf));
-        status_ = UNDETERMINED;
     }
  
     ~Transaction() {
@@ -336,17 +324,10 @@ public:
             return false;
         return true;
     }
-    void CommitWrite(unsigned long long ti_and_ts, AbstractPtmObject *object, TransactionStatus *tx_status) {
-        curr_tx_status_ = tx_status;
-        mfence();
+    void CommitWrite(unsigned long long ti_and_ts, AbstractPtmObject *object) {
         objs_[pos_].ti_and_ts_ = ti_and_ts;
         objs_[pos_].object_.Copy(object);
-    }
-    void IncPos() {
         pos_ = (pos_+1)%kVersionSize;
-    }
-    void Persist() {
-        clflush((char *)&curr_tx_status_, sizeof(TransactionStatus));
         clflush((char *)&pos_, sizeof(int));
         clflush((char *)&objs_[pos_], sizeof(OldObject));
     }
@@ -475,7 +456,6 @@ retry:
 };
 
 void InitTransaction() {
-    thread_tx.status_ = ACTIVE;
     thread_tx.r_set_->Clear();
     thread_tx.w_set_->Clear();
      for(int i=0; i<kMaxThreadNum; i++) {
@@ -495,17 +475,19 @@ static void sth_ptm_commit() {
             sth_ptm_abort();
         }
         unsigned long long commit_ts = thread_tx.thread_clock_ + 1;
-        // commit writes
-        TransactionStatus *tx_status = new TransactionStatus;
-        *tx_status = thread_tx.status_;
-        thread_tx.w_set_->CommitWrites(TI_AND_TS(thread_tx.thread_id_, commit_ts), tx_status);
-        thread_tx.w_set_->IncPos();
-        thread_tx.w_set_->Persist();
+        // Why shouldn't we release locks when commit writes?  
+        // If so, another tx may read the timestamp from the committed
+        // objects, but there are also some objects that are not committed.
+        // Then it may read unconsistent data. For example, it can read the
+        // committed objects, but can not read uncommitted objects. And if
+        // we release locks after committing writes, other tx can not get
+        // the latest timestamp until committing writes are finished.
+        thread_tx.w_set_->CommitWrites(TI_AND_TS(thread_tx.thread_id_, commit_ts));
         thread_tx.w_set_->Unlock();
+        // we need a mfence here.
         mfence();
-        *tx_status = thread_tx.status_ = COMMITTED;
-        // be careful, we may loss this memory space
-        clflush((char *)tx_status, sizeof(TransactionStatus));
+        thread_tx.persisted_thread_clock_ = commit_ts;
+        clflush((char *)(&(thread_tx.persisted_thread_clock_)), sizeof(unsigned long long));
         mfence();
         thread_tx.thread_clock_ = commit_ts;
     }
