@@ -167,6 +167,7 @@ AbstractIntset *set_new() {
 }
 
 unsigned long long set_size(AbstractIntset *intset) {
+    intset->Size();
     return intset->Size();
 }
 
