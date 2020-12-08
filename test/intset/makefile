@@ -5,7 +5,7 @@ DEFAULT: test
 CC= g++
 LD = g++
 
-LIBS = -lm -lpthread -lrt -latomic -ljemalloc
+LIBS = -lm -lpthread -lrt -latomic -ljemalloc -lvmem
 CFLAGS = -g -Wall -Wno-unused -Wno-return-type -Wno-sign-compare -std=c++17 -I. -O3
 CFLAGS += -I../../include
 OBJDIR = ../obj

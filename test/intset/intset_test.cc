@@ -27,13 +27,13 @@
 #include "intset.h"
 #endif
 
-// #ifndef INTSET_HASH_TABLE_H_
-// #include "hashtable.h"
-// #endif
-
-#ifndef INTSET_LINKEDLIST_H_
-#include "linkedlist.h"
+#ifndef INTSET_HASH_TABLE_H_
+#include "hashtable.h"
 #endif
+
+// #ifndef INTSET_LINKEDLIST_H_
+// #include "linkedlist.h"
+// #endif
 
 // #ifndef INTSET_BST_H_
 // #include "bst.h"
@@ -274,6 +274,9 @@ static void *test(void *data)
 
 int main(int argc, char **argv)
 {
+#ifdef USE_AEP
+  init_vmp();
+#endif
   struct option long_options[] = {
     // These options don't set a flag
     {"help",                      no_argument,       NULL, 'h'},

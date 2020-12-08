@@ -45,17 +45,26 @@ public:
 
 /* 
  * test with the following command:
- * ./intset-ht -i 100000 -r 1000000 -u 0 -n 1 
+ * ./intset-ht -i 10000 -r 20000 -u 0 -n 1 
  */
 
 class HashTable : public AbstractIntset {
 public:
     HashTable() {
-        capacity_ = 1000000;     // 10k
+        capacity_ = 10000;     // 10k
+#ifdef USE_AEP
+        dict_ = (PtmObjectWrapper<Entry> **)vmem_malloc(sizeof(PtmObjectWrapper<Entry>*)*capacity_);
+#else
         dict_ = new PtmObjectWrapper<Entry>*[capacity_];
+#endif
         for(int i=0; i<capacity_; i++) {
             PTM_START(RDWR);
+#ifdef USE_AEP
+            PtmObjectWrapper<Entry> *tmp = (PtmObjectWrapper<Entry> *)vmem_malloc(sizeof(PtmObjectWrapper<Entry>));
+            new (tmp) PtmObjectWrapper<Entry>();
+#else
             PtmObjectWrapper<Entry> *tmp = new PtmObjectWrapper<Entry>();
+#endif
             Entry *entry = tmp->Open(WRITE);
             entry->key_ = INVALID;
             entry->next_ = nullptr;
@@ -144,7 +153,12 @@ int HashTable::Insert(Key_t key, Value_t val) {
         entry->val_ = val;
     }else {
         // we need alloc a new entry
+#ifdef USE_AEP
+        PtmObjectWrapper<Entry> *new_entry_wrapper = (PtmObjectWrapper<Entry> *)vmem_malloc(sizeof(PtmObjectWrapper<Entry>));
+        new (new_entry_wrapper) PtmObjectWrapper<Entry>();
+#else
         PtmObjectWrapper<Entry> *new_entry_wrapper = new PtmObjectWrapper<Entry>();
+#endif
         Entry *new_entry = new_entry_wrapper->Open(WRITE);
         new_entry->key_ = key;
         new_entry->val_ = val;

@@ -25,6 +25,12 @@
 #include "sth_const.h"
 #endif
 
+#define USE_AEP
+
+#ifdef USE_AEP
+#include "aep.h"
+#endif
+
 #include <vector>
 #include <iostream>
 #include <setjmp.h>
