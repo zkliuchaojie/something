@@ -43,7 +43,12 @@ public:
 public:
     LinkedList() {
         PTM_START(RDWR);
+#ifdef USE_AEP
+        sentinel_ = (PtmObjectWrapper<PONode> *)vmem_malloc(sizeof(PtmObjectWrapper<PONode>));
+        new (sentinel_) PtmObjectWrapper<PONode>();
+#else
         sentinel_ = new PtmObjectWrapper<PONode>();
+#endif
         PONode *po_node = sentinel_->Open(WRITE);
         po_node->next_ = sentinel_;
         PTM_COMMIT;
@@ -98,7 +103,12 @@ int LinkedList::Insert(Key_t key, Value_t val) {
     PONode *po_node = nullptr;
     curr->Open(WRITE);
     po_node = prev->Open(WRITE);
-    PtmObjectWrapper<PONode> *new_po_node_wrapper = new PtmObjectWrapper<PONode>();
+#ifdef USE_AEP
+        PtmObjectWrapper<PONode> *new_po_node_wrapper = (PtmObjectWrapper<PONode> *)vmem_malloc(sizeof(PtmObjectWrapper<PONode>));
+        new (new_po_node_wrapper) PtmObjectWrapper<PONode>();
+#else
+        PtmObjectWrapper<PONode> *new_po_node_wrapper = new PtmObjectWrapper<PONode>();
+#endif
     PONode *new_po_node = new_po_node_wrapper->Open(WRITE);
     new_po_node->val_ = val;
     new_po_node->next_ = curr;
