@@ -306,7 +306,6 @@ public:
             objs_[i].ti_and_ts_ = kInvalidTiAndTs;
         pos_ = 0;
         lock_ = -1;
-        curr_tx_status_ = nullptr;
     }
 
     T *Open(OpenMode mode) {
@@ -336,7 +335,6 @@ public:
         lock_ = -1;
     }
 private:
-    volatile TransactionStatus *curr_tx_status_;
     // pos_ is a index, that points the empty space that is used to store the latest version.
     volatile int pos_;
     volatile int lock_;  // -1 means not locked, 0~kVersionSize-1 means locked
