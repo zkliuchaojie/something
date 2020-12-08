@@ -59,7 +59,12 @@ public:
     Rbt() {
         PTM_START(RDWR);
         // init nil_
+#ifdef USE_AEP
+        nil_ = (PtmObjectWrapper<PONode> *)vmem_malloc(sizeof(PtmObjectWrapper<PONode>));
+        new (nil_) PtmObjectWrapper<PONode>();
+#else
         nil_ = new PtmObjectWrapper<PONode>();
+#endif
         PONode *nil_node = nil_->Open(WRITE);
         nil_node->left_ = nullptr;
         nil_node->right_ = nullptr;
@@ -67,7 +72,12 @@ public:
         nil_node->color_ = BLACK;
 
         // init sentinel_
+#ifdef USE_AEP
+        sentinel_ = (PtmObjectWrapper<PONode> *)vmem_malloc(sizeof(PtmObjectWrapper<PONode>));
+        new (sentinel_) PtmObjectWrapper<PONode>();
+#else
         sentinel_ = new PtmObjectWrapper<PONode>();
+#endif
         PONode *sentinel_node = sentinel_->Open(WRITE);
         sentinel_node->left_ = nil_;    // this is root
         sentinel_node->right_ = nullptr;
@@ -241,7 +251,12 @@ int Rbt::Insert(Key_t key, Value_t val) {
             }
         }
     }
-    PtmObjectWrapper<PONode> *new_po_node_wrapper = new PtmObjectWrapper<PONode>();
+#ifdef USE_AEP
+        PtmObjectWrapper<PONode> *new_po_node_wrapper = (PtmObjectWrapper<PONode> *)vmem_malloc(sizeof(PtmObjectWrapper<PONode>));
+        new (new_po_node_wrapper) PtmObjectWrapper<PONode>();
+#else
+        PtmObjectWrapper<PONode> *new_po_node_wrapper = new PtmObjectWrapper<PONode>();
+#endif
     PONode *new_po_node = new_po_node_wrapper->Open(WRITE);
     new_po_node->val_ = val;
     new_po_node->left_ = nil_;
