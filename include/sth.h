@@ -279,13 +279,15 @@ public:
     }
 public:
     // if object's timestamp is less or equal to end_[object's tid]
-    // return true; else return false. 
-    bool CmpClocks(unsigned long long ti_and_ts) {
+    // return true; else return false.
+    bool CmpClocks(unsigned long long ti_and_ts, bool update_latest) {
         if (TS(ti_and_ts) <= ends_[TI(ti_and_ts)]) {
             return true;
         } else {
-            if (TS(ti_and_ts) > latest_[TI(ti_and_ts)])
+            if ((update_latest == true) && TS(ti_and_ts) > latest_[TI(ti_and_ts)]) {
+                // std::cout << "update: " << TS(ti_and_ts) << std::endl;
                 latest_[TI(ti_and_ts)] = TS(ti_and_ts);
+            }
             return false;
         }
     }
@@ -307,7 +309,6 @@ template <typename T>
 class alignas(kCacheLineSize) PtmObjectWrapper : public AbstractPtmObjectWrapper {
 public:
     PtmObjectWrapper() {
-        // I am not clear when generating a new PtmObject
         for(int i=0; i<kVersionSize; i++)
             objs_[i].ti_and_ts_ = kInvalidTiAndTs;
         pos_ = 0;
@@ -330,8 +331,8 @@ public:
         return true;
     }
     void CommitWrite(unsigned long long ti_and_ts, AbstractPtmObject *object) {
-        objs_[pos_].ti_and_ts_ = ti_and_ts;
         objs_[pos_].object_.Copy(object);
+        objs_[pos_].ti_and_ts_ = ti_and_ts;
         pos_ = (pos_+1)%kVersionSize;
         clflush((char *)&pos_, sizeof(int));
         clflush((char *)&objs_[pos_], sizeof(OldObject));
@@ -366,13 +367,17 @@ retry:
         int write_pos = pos_;
         int curr_pos = (kVersionSize+write_pos-1)%kVersionSize;
         unsigned long long curr_ti_and_ts = objs_[curr_pos].ti_and_ts_;
-        if (thread_tx.CmpClocks(curr_ti_and_ts) == true) {
+        if (curr_ti_and_ts == kInvalidTiAndTs) {
+            std::cout << "should not go here" << std::endl;
+        }
+        if (thread_tx.CmpClocks(curr_ti_and_ts, lock_ != curr_pos) == true) {
             T *ret;
             ret = (T *)thread_tx.w_set_->GetWrtieObjectBy(this);
             if (ret != nullptr)
                 return ret;
             ret = (T *)objs_[curr_pos].object_.Clone();
-            if (lock_ == curr_pos ||
+            // write_pos != pos_ is to ensure that ret is the latest version.
+            if (write_pos != pos_ || lock_ == curr_pos ||
                 objs_[curr_pos].ti_and_ts_ != curr_ti_and_ts) {
                 goto retry;
             }
@@ -387,23 +392,26 @@ retry:
             // tx may read B'', which is updated with A'' in the same
             // transaction.
             if (thread_tx.mode_ == RDWR) {
-                if (thread_tx.r_set_->Validate()) {
+                if (lock_ == -1 && thread_tx.r_set_->Validate()) {
                     thread_tx.UpdateEnds(curr_ti_and_ts);
                     goto retry;
                 }
-            } else {
+            } else if (lock_ != -1 && thread_tx.mode_ == RDONLY) {
                 for(int i=1; i<kVersionSize; i++) {
                     curr_pos = (kVersionSize+write_pos-1-i)%kVersionSize;
                     curr_ti_and_ts = objs_[curr_pos].ti_and_ts_;
-                    if (curr_ti_and_ts == kInvalidTiAndTs)
+                    if (curr_ti_and_ts == kInvalidTiAndTs) {
                         break;
-                    if (thread_tx.CmpClocks(curr_ti_and_ts) == true) {
+                    }
+                    if (thread_tx.CmpClocks(curr_ti_and_ts, lock_ != curr_pos) == true) {
                         T *ret = (T *)objs_[curr_pos].object_.Clone();
-                        if (lock_ == curr_pos ||
+                        if (pos_ != write_pos || lock_ == curr_pos ||
                             objs_[curr_pos].ti_and_ts_ != curr_ti_and_ts) {
-                            goto retry;
+                            break;
                         }
                         return ret;
+                    } else {
+                        break;
                     }
                 }
             }
@@ -427,7 +435,7 @@ retry:
 
         // first condition is a special case: PtmObject is not initialized.
         if (curr_ti_and_ts == kInvalidTiAndTs ||
-            thread_tx.CmpClocks(curr_ti_and_ts) == true) {
+            thread_tx.CmpClocks(curr_ti_and_ts, lock_ != curr_pos) == true) {
             T *ret;
             ret = (T *)thread_tx.w_set_->GetWrtieObjectBy(this);
             if (ret != nullptr) {
@@ -435,8 +443,9 @@ retry:
             }
             int tmp = -1;
             if (CAS(&lock_, &tmp, write_pos) == true) {
+                // the first condition is a must, since other tx may modify it and commit.
                 // the second condition is a must, since there may be a circle.
-                if (write_pos != pos_ || 
+                if (write_pos != pos_ ||
                     curr_ti_and_ts != objs_[curr_pos].ti_and_ts_) {
                     lock_ = -1;
                     goto retry;
@@ -449,7 +458,11 @@ retry:
                 sth_ptm_abort();
             }
         } else {
-            if (thread_tx.r_set_->Validate()) {
+            // The condition of lock_ == -1 is a must, because
+            // even though RDWR tx won't read unconsistent data,
+            // next RDONLY tx may use those timestamps, leading
+            // to error.
+            if (lock_ == -1 && thread_tx.r_set_->Validate()) {
                 thread_tx.UpdateEnds(curr_ti_and_ts);
                 goto retry;
             } else {
@@ -487,6 +500,7 @@ static void sth_ptm_commit() {
         // we release locks after committing writes, other tx can not get
         // the latest timestamp until committing writes are finished.
         thread_tx.w_set_->CommitWrites(TI_AND_TS(thread_tx.thread_id_, commit_ts));
+        mfence();
         thread_tx.w_set_->Unlock();
         // we need a mfence here.
         mfence();
@@ -500,6 +514,7 @@ static void sth_ptm_commit() {
 void sth_ptm_abort() {
     thread_tx.w_set_->Unlock();
     InitTransaction();
+    // std::cout << "abort" << std::endl;
     thread_abort_counter++;
     siglongjmp(*(thread_tx.env_), 1);
 }
