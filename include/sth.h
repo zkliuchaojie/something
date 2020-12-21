@@ -13,14 +13,6 @@
 #include "persist.h"
 #endif
 
-#ifndef MM_POOL_H_
-#include "mm_pool.h"
-#endif
-
-#ifndef MM_ABSTRACT_OBJECT_H_
-#include "mm_abstract_object.h"
-#endif
-
 #ifndef STH_CONST_H_
 #include "sth_const.h"
 #endif

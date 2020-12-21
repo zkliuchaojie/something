@@ -1,4 +1,4 @@
-.PHONY: clean ll-test
+.PHONY: clean
 
 DEFAULT: test
 # Define the tools we are going to use
