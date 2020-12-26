@@ -4,6 +4,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+// #define PM_AVAILABLE
+
+#ifdef PM_AVAILABLE
+
 #include <libvmem.h>
 
 VMEM *vmp;
@@ -28,5 +33,23 @@ void* vmem_malloc(unsigned long size) {
 void vmem_free(void *ptr) {
 	vmem_free(vmp, ptr);
 }
+
+#else
+void init_vmp() {
+	;
+}
+
+void delete_vmp() {
+	;
+}
+
+void* vmem_malloc(unsigned long size) {
+	return (void*)malloc(size);
+}
+
+void vmem_free(void *ptr) {
+	vmem_free(ptr);
+}
+#endif
 
 #endif

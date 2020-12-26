@@ -3,8 +3,12 @@
 
 // hashtable is implemented with linked lists
 
-#ifndef STH_STH_H_
-#include "sth.h"
+// #ifndef STH_STH_H_
+// #include "sth.h"
+// #endif
+
+#ifndef DUDETM_H_
+#include "dudetm.h"
 #endif
 
 #ifndef INTSET_H_

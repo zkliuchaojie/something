@@ -544,6 +544,14 @@ int main(int argc, char **argv)
     sigsuspend(&block_set);
   }
   stop = 1;
+#ifdef DUDETM_H_
+#ifdef ASYNC_DUDETM
+  // persist thread stop
+  persist_thread_stop = true;
+#endif
+  // reproduce thread stop
+  reproduce_thread_stop = true;
+#endif
   gettimeofday(&end, NULL);
   printf("STOPPING...\n");
 

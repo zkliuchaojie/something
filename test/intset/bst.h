@@ -1,8 +1,12 @@
 #ifndef INTSET_BST_H_
 #define INTSET_BST_H_
 
-#ifndef STH_H_
-#include "sth.h"
+// #ifndef STH_STH_H_
+// #include "sth.h"
+// #endif
+
+#ifndef DUDETM_H_
+#include "dudetm.h"
 #endif
 
 #ifndef INTSET_H_
