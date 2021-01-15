@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-// #define PM_AVAILABLE
+#define PM_AVAILABLE
 
 #ifdef PM_AVAILABLE
 
@@ -48,7 +48,7 @@ void* vmem_malloc(unsigned long size) {
 }
 
 void vmem_free(void *ptr) {
-	vmem_free(ptr);
+	free(ptr);
 }
 #endif
 

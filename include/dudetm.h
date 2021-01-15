@@ -299,6 +299,10 @@ public:
     void AllocateNewSegment() {
         curr_log_segment_ = new LogSegment();
         curr_log_segment_->segment_ = (char *)vmem_malloc(16*1024*1024);
+        if (!curr_log_segment_->segment_) {
+            std::cout << "can not alloc memory" << std::endl;
+            exit(-1);
+        }
         curr_log_segment_->pos_ = 0;
         log_segment_vec_.push_back(curr_log_segment_);
     }
@@ -367,6 +371,8 @@ public:
 thread_local Transaction thread_tx;
 thread_local unsigned long long thread_read_abort_counter = 0;
 thread_local unsigned long long thread_abort_counter = 0;
+// log region
+thread_local LogRegion log_region;
 
 // global things
 // global logical clock
@@ -383,8 +389,6 @@ volatile bool persist_thread_stop;
 #endif
 // reproduce thread stop
 volatile bool reproduce_thread_stop;
-// log region
-LogRegion log_region;
 // used by reproduce thread
 std::priority_queue<RedoLog*, std::vector<RedoLog*>, CompareRedolog> persisted_redologs;
 
