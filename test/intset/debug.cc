@@ -14,8 +14,12 @@
 // #include "bst.h"
 // #endif
 
-#ifndef INTSET_RBT_H_
-#include "rbt.h"
+// #ifndef INTSET_RBT_H_
+// #include "rbt.h"
+// #endif
+
+#ifndef INTSET_BPT_H_
+#include "bpt.h"
 #endif
 
 #include <iostream>
@@ -100,6 +104,10 @@ AbstractIntset *set_new() {
 #else
 #ifdef INTSET_RBT_H_
     return new Rbt();
+#else
+#ifdef INTSET_BPT_H_
+    return new Bpt();
+#endif
 #endif
 #endif
 #endif

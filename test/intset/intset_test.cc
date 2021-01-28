@@ -27,9 +27,9 @@
 #include "intset.h"
 #endif
 
-#ifndef INTSET_HASH_TABLE_H_
-#include "hashtable.h"
-#endif
+// #ifndef INTSET_HASH_TABLE_H_
+// #include "hashtable.h"
+// #endif
 
 // #ifndef INTSET_LINKEDLIST_H_
 // #include "linkedlist.h"
@@ -42,6 +42,10 @@
 // #ifndef INTSET_RBT_H_
 // #include "rbt.h"
 // #endif
+
+#ifndef INTSET_BPT_H_
+#include "bpt.h"
+#endif
 
 #include <assert.h>
 #include <getopt.h>
@@ -160,6 +164,10 @@ AbstractIntset *set_new() {
 #else
 #ifdef INTSET_RBT_H_
     return new Rbt();
+#else
+#ifdef INTSET_BPT_H_
+    return new Bpt();
+#endif
 #endif
 #endif
 #endif
