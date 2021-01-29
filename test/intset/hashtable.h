@@ -7,8 +7,12 @@
 // #include "sth.h"
 // #endif
 
-#ifndef DUDETM_H_
-#include "dudetm.h"
+// #ifndef DUDETM_H_
+// #include "dudetm.h"
+// #endif
+
+#ifndef PMDKTX_H_
+#include "pmdktx.h"
 #endif
 
 #ifndef INTSET_H_
@@ -32,6 +36,7 @@ public:
     Entry() : key_(INVALID), val_(0), next_(nullptr) {};
     Entry(Key_t key, Value_t val) : key_(key), val_(val), next_(nullptr) {};
     ~Entry() {};
+#ifndef PMDKTX_H_
     AbstractPtmObject *Clone() {
         Entry *entry = new Entry();
         entry->val_ = val_;
@@ -45,6 +50,7 @@ public:
         val_ = entry->val_;
         next_ = entry->next_;
     }
+#endif
 };
 
 /* 
@@ -88,9 +94,16 @@ public:
   private:
     size_t capacity_;
     PtmObjectWrapper<Entry> **dict_;
+#ifdef PMDKTX_H_
+private:
+    std::shared_mutex rw_lock_;
+#endif
 };
 
 Value_t HashTable::Get(Key_t key) {
+#ifdef PMDKTX_H_
+    std::shared_lock<std::shared_mutex> lock(rw_lock_);
+#endif
     // the default: doesn't contain
     PTM_START(RDONLY);
     Value_t retval=0;
@@ -113,6 +126,9 @@ Value_t HashTable::Get(Key_t key) {
 }
 
 bool HashTable::Update(Key_t key, Value_t val) {
+#ifdef PMDKTX_H_
+    std::unique_lock<std::shared_mutex> lock(rw_lock_);
+#endif
     PTM_START(RDWR);
     bool ret = false;
     auto key_hash = h(&key, sizeof(key));
@@ -145,6 +161,9 @@ bool HashTable::Update(Key_t key, Value_t val) {
 }
 
 int HashTable::Insert(Key_t key, Value_t val) {
+#ifdef PMDKTX_H_
+    std::unique_lock<std::shared_mutex> lock(rw_lock_);
+#endif
     PTM_START(RDWR);
     // std::cout << "insert: " << key << std::endl;
     auto key_hash = h(&key, sizeof(key));
@@ -175,6 +194,9 @@ int HashTable::Insert(Key_t key, Value_t val) {
 }
 
 int HashTable::Delete(Key_t key) {
+#ifdef PMDKTX_H_
+    std::unique_lock<std::shared_mutex> lock(rw_lock_);
+#endif
     PTM_START(RDWR);
     bool ret = 0;
     // std::cout << "delete: " << key << std::endl;
@@ -212,6 +234,9 @@ int HashTable::Delete(Key_t key) {
 }
 
 unsigned long long HashTable::Size() {
+#ifdef PMDKTX_H_
+    std::shared_lock<std::shared_mutex> lock(rw_lock_);
+#endif
     PTM_START(RDONLY);
     unsigned long long ret = 0;
     // std::cout << "size" << std::endl;

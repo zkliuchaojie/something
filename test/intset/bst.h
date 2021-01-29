@@ -5,8 +5,12 @@
 // #include "sth.h"
 // #endif
 
-#ifndef DUDETM_H_
-#include "dudetm.h"
+// #ifndef DUDETM_H_
+// #include "dudetm.h"
+// #endif
+
+#ifndef PMDKTX_H_
+#include "pmdktx.h"
 #endif
 
 #ifndef INTSET_H_
@@ -28,6 +32,7 @@ public:
     PONode(Value_t val) : val_(val), left_(nullptr),
                right_(nullptr), parent_(nullptr) {};
     ~PONode() {};
+#ifndef PMDKTX_H_
     AbstractPtmObject *Clone() {
         PONode *po_node = new PONode();
         po_node->val_ = val_;
@@ -43,6 +48,7 @@ public:
         right_ = po_node->right_;
         parent_ = po_node->parent_;
     }
+#endif
 };
 
 class Bst : public AbstractIntset {
@@ -82,10 +88,17 @@ private:
                 PtmObjectWrapper<PONode> *old_wrapper,
                 PONode *old, 
                 PtmObjectWrapper<PONode> *new_wrapper);
+#ifdef PMDKTX_H_
+private:
+    std::shared_mutex rw_lock_;
+#endif
 
 };
 
 Value_t Bst::Get(Key_t key) {
+#ifdef PMDKTX_H_
+    std::unique_lock<std::shared_mutex> lock(rw_lock_);
+#endif
     PTM_START(RDONLY);
     Value_t retval = 0;
     PONode *sentinel_node = sentinel_->Open(READ);
@@ -107,6 +120,9 @@ Value_t Bst::Get(Key_t key) {
 }
 
 int Bst::Insert(Key_t key, Value_t val) {
+#ifdef PMDKTX_H_
+    std::unique_lock<std::shared_mutex> lock(rw_lock_);
+#endif
     PTM_START(RDWR);
     PtmObjectWrapper<PONode> *curr_wrapper = sentinel_;
     PtmObjectWrapper<PONode> *saved_curr_wrapper = curr_wrapper;
@@ -168,6 +184,9 @@ void Bst::Transplant(PONode *old_parent,
 }
 
 int Bst::Delete(Key_t key) {
+#ifdef PMDKTX_H_
+    std::unique_lock<std::shared_mutex> lock(rw_lock_);
+#endif
     PTM_START(RDWR);
     bool retval = 0;
     // std::cout <<"delete: " << key << std::endl;
@@ -219,6 +238,9 @@ int Bst::Delete(Key_t key) {
 }
 
 unsigned long long Bst::Size() {
+#ifdef PMDKTX_H_
+    std::shared_lock<std::shared_mutex> lock(rw_lock_);
+#endif
     PTM_START(RDONLY);
     unsigned long long retval = 0;
     PONode *sentinel_node = sentinel_->Open(READ);

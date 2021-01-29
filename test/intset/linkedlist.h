@@ -5,8 +5,12 @@
 // #include "sth.h"
 // #endif
 
-#ifndef DUDETM_H_
-#include "dudetm.h"
+// #ifndef DUDETM_H_
+// #include "dudetm.h"
+// #endif
+
+#ifndef PMDKTX_H_
+#include "pmdktx.h"
 #endif
 
 #ifndef INTSET_H_
@@ -26,6 +30,7 @@ public:
     PONode(Value_t val) : val_(val), next_(nullptr) {};
     PONode(Value_t val, PtmObjectWrapper<PONode> *next) : val_(val), next_(next) {};
     ~PONode() {};
+#ifndef PMDKTX_H_
     AbstractPtmObject *Clone() {
         PONode *po_node = new PONode();
         po_node->val_ = val_;
@@ -37,6 +42,7 @@ public:
         val_ = po_node->val_;
         next_ = po_node->next_;
     }
+#endif
 };
 
 class LinkedList : public AbstractIntset {
@@ -68,9 +74,16 @@ public:
     int Insert(Key_t key, Value_t val);
     int Delete(Key_t key);
     unsigned long long Size();
+#ifdef PMDKTX_H_
+private:
+    std::shared_mutex rw_lock_;
+#endif
 };
 
 Value_t LinkedList::Get(Key_t key) {
+#ifdef PMDKTX_H_
+    std::shared_lock<std::shared_mutex> lock(rw_lock_);
+#endif
     PTM_START(RDONLY);
      Value_t retval=0;
     PONode *node = sentinel_->Open(READ);
@@ -90,6 +103,9 @@ Value_t LinkedList::Get(Key_t key) {
 }
 
 int LinkedList::Insert(Key_t key, Value_t val) {
+#ifdef PMDKTX_H_
+    std::unique_lock<std::shared_mutex> lock(rw_lock_);
+#endif
     PTM_START(RDWR);
     // std::cout <<"insert: " << val << std::endl;
     PtmObjectWrapper<PONode> *prev = sentinel_;
@@ -122,6 +138,9 @@ int LinkedList::Insert(Key_t key, Value_t val) {
 }
 
 int LinkedList::Delete(Key_t key) {
+#ifdef PMDKTX_H_
+    std::unique_lock<std::shared_mutex> lock(rw_lock_);
+#endif
     PTM_START(RDWR);
     bool ret = 0;
     // std::cout <<"delete: " << key << std::endl;
@@ -151,6 +170,9 @@ int LinkedList::Delete(Key_t key) {
 }
 
 unsigned long long LinkedList::Size() {
+#ifdef PMDKTX_H_
+    std::shared_lock<std::shared_mutex> lock(rw_lock_);
+#endif
     PTM_START(RDONLY);
     unsigned long long retval = 0;
     PONode *node = sentinel_->Open(READ);

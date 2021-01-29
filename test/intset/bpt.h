@@ -1,13 +1,17 @@
 #ifndef INTSET_BPT_H_
 #define INTSET_BPT_H_
 
-#ifndef STH_STH_H_
-#include "sth.h"
-#endif
+// #ifndef STH_STH_H_
+// #include "sth.h"
+// #endif
 
 // #ifndef DUDETM_H_
 // #include "dudetm.h"
 // #endif
+
+#ifndef PMDKTX_H_
+#include "pmdktx.h"
+#endif
 
 #ifndef INTSET_H_
 #include "intset.h"
@@ -28,6 +32,7 @@ public:
 public:
     PONode() : parent_(NULL), is_leaf_(false), num_keys_(0) {};
     ~PONode() {};
+#ifndef PMDKTX_H_
     AbstractPtmObject *Clone() {
         PONode *po_node = new PONode();
         memcpy(po_node->pointers_, pointers_, sizeof(void *) * ORDER);
@@ -45,6 +50,7 @@ public:
         is_leaf_ = po_node->is_leaf_ ;
         num_keys_ = po_node->num_keys_ ;
     }
+#endif
 };
 
 class Bpt : public AbstractIntset {
@@ -76,6 +82,10 @@ public:
     int Insert(Key_t key, Value_t val);
     int Delete(Key_t key);
     unsigned long long Size();
+#ifdef PMDKTX_H_
+private:
+    std::shared_mutex rw_lock_;
+#endif
 
 private:
     void Transplant(PONode *old_parent,
@@ -123,6 +133,9 @@ PtmObjectWrapper<PONode> *Bpt::find_leaf(Key_t key) {
 }
 
 Value_t Bpt::Get(Key_t key) {
+#ifdef PMDKTX_H_
+    std::shared_lock<std::shared_mutex> lock(rw_lock_);
+#endif
     PTM_START(RDONLY);
     PtmObjectWrapper<PONode> *leaf_wrapper = find_leaf(key);
     if (leaf_wrapper == nullptr) {
@@ -142,6 +155,9 @@ Value_t Bpt::Get(Key_t key) {
 }
 
 unsigned long long Bpt::Size() {
+#ifdef PMDKTX_H_
+    std::shared_lock<std::shared_mutex> lock(rw_lock_);
+#endif
     PTM_START(RDONLY);
     unsigned long long retval = 0;
     PONode *sentinel_node = sentinel_->Open(READ);
@@ -322,6 +338,9 @@ void Bpt::insert_into_node_after_splitting(PtmObjectWrapper<PONode> *old_node_wr
 }
 
 int Bpt::Insert(Key_t key, Value_t val) {
+#ifdef PMDKTX_H_
+    std::unique_lock<std::shared_mutex> lock(rw_lock_);
+#endif
     PTM_START(RDWR);
     PONode *sentinel_node = sentinel_->Open(READ);
     PtmObjectWrapper<PONode> *curr_wrapper = (PtmObjectWrapper<PONode> *)sentinel_node->pointers_[0];
@@ -552,6 +571,9 @@ void Bpt::remove_entry_from_node(PtmObjectWrapper<PONode> *n_wrapper, Key_t key,
 }
 
 int Bpt::Delete(Key_t key) {
+#ifdef PMDKTX_H_
+    std::unique_lock<std::shared_mutex> lock(rw_lock_);
+#endif
     PTM_START(RDWR);
     PtmObjectWrapper<PONode> *key_leaf_wrapper = find_leaf(key);
     if (key_leaf_wrapper == nullptr) {
