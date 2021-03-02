@@ -1,17 +1,25 @@
 #ifndef INTSET_BST_H_
 #define INTSET_BST_H_
 
-// #ifndef STH_STH_H_
-// #include "sth.h"
+//#ifndef STH__H_
+//#include "sth.h"
+//#endif
+
+// #ifndef STH_REDO_H_
+// #include "sth_redo.h"
 // #endif
+
+#ifndef STH_UNDO_H_
+#include "sth_undo.h"
+#endif
 
 // #ifndef DUDETM_H_
 // #include "dudetm.h"
 // #endif
 
-#ifndef PMDKTX_H_
-#include "pmdktx.h"
-#endif
+// #ifndef PMDKTX_H_
+// #include "pmdktx.h"
+// #endif
 
 #ifndef INTSET_H_
 #include "intset.h"
@@ -34,7 +42,16 @@ public:
     ~PONode() {};
 #ifndef PMDKTX_H_
     AbstractPtmObject *Clone() {
-        PONode *po_node = new PONode();
+#ifdef STH_REDO_H_ 
+#ifdef USE_AEP
+	PONode *po_node = (PONode *)vmem_malloc(sizeof(PONode));
+        new (po_node) PONode();
+#else
+	PONode *po_node = new PONode();
+#endif
+#else
+	PONode *po_node = new PONode();
+#endif
         po_node->val_ = val_;
         po_node->left_ = left_;
         po_node->right_ = right_;
