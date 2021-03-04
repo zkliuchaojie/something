@@ -50,7 +50,16 @@ public:
 	PONode *po_node = new PONode();
 #endif
 #else
+#ifdef STH_UNDO_H_ 
+#ifdef USE_AEP
+        PONode *po_node = (PONode *)vmem_malloc(sizeof(PONode));
+        new (po_node) PONode();
+#else
+        PONode *po_node = new PONode();
+#endif
+#else
 	PONode *po_node = new PONode();
+#endif
 #endif
         po_node->val_ = val_;
         po_node->left_ = left_;
