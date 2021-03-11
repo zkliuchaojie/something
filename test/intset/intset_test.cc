@@ -35,17 +35,17 @@
 // #include "linkedlist.h"
 // #endif
 
-// #ifndef INTSET_BST_H_
-// #include "bst.h"
-// #endif
+#ifndef INTSET_BST_H_
+#include "bst.h"
+#endif
 
 // #ifndef INTSET_RBT_H_
 // #include "rbt.h"
 // #endif
 
-#ifndef INTSET_BPT_H_
-#include "bpt.h"
-#endif
+// #ifndef INTSET_BPT_H_
+// #include "bpt.h"
+// #endif
 
 #include <assert.h>
 #include <getopt.h>

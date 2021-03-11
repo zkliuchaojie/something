@@ -1,17 +1,17 @@
 #ifndef INTSET_BST_H_
 #define INTSET_BST_H_
 
-// #ifndef STH_STH_H_
-// #include "sth.h"
-// #endif
+#ifndef STH_H_
+#include "sth.h"
+#endif
 
 // #ifndef DUDETM_H_
 // #include "dudetm.h"
 // #endif
 
-#ifndef PMDKTX_H_
-#include "pmdktx.h"
-#endif
+// #ifndef PMDKTX_H_
+// #include "pmdktx.h"
+// #endif
 
 #ifndef INTSET_H_
 #include "intset.h"
