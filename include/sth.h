@@ -362,6 +362,7 @@ retry:
         if (curr_ti_and_ts == kInvalidTiAndTs) {
             std::cout << "should not go here" << std::endl;
         }
+
         if (thread_tx.CmpClocks(curr_ti_and_ts, lock_ != curr_pos) == true) {
             T *ret;
             ret = (T *)thread_tx.w_set_->GetWrtieObjectBy(this);
@@ -407,6 +408,11 @@ retry:
                     }
                 }
             }
+		if (lock_ == -1 && thread_tx.r_set_->Validate()) {
+                    thread_tx.UpdateEnds(curr_ti_and_ts);
+                    goto retry;
+                }
+
             thread_read_abort_counter++;
             sth_ptm_abort();
         }
