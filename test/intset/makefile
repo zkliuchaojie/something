@@ -15,6 +15,12 @@ JUNK = *~ $(OBJDIR)/*.o $(OBJDIR)/*.a $(OBJDIR)/*_ut  *-test *-*
 # tests
 run-all-test:
 
+ycsb-test: $(OBJDIR)/ycsb_test.o
+	$(LD) $(CFLAGS) -o $@ $^ $(LIBS)
+
+$(OBJDIR)/ycsb_test.o: ycsb_test.cc
+	$(CC) $(CFLAGS) -c -o $@ $<
+
 intset-test:  $(OBJDIR)/intset_test.o
 	$(LD) $(CFLAGS) -o $@ $^ $(LIBS)
 
