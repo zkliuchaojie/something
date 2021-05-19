@@ -165,7 +165,9 @@ public:
     void Persist() {
 	//std::cout << entries_num_ << std::endl;
 	for (int i=0; i<entries_num_; i++) {
-	    clflush((char *)(set_[i].object_), 64);
+        char *persist_region = (char *)vmem_malloc(64));
+        memcpy(persist_region, set[i].object_, 64);
+	    clflush(persist_region, 64);
         }
     }
     void Unlock() {

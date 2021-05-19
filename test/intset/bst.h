@@ -5,13 +5,13 @@
 //#include "sth.h"
 //#endif
 
-// #ifndef STH_REDO_H_
-// #include "sth_redo.h"
-// #endif
-
-#ifndef STH_UNDO_H_
-#include "sth_undo.h"
+#ifndef STH_REDO_H_
+#include "sth_redo.h"
 #endif
+
+// #ifndef STH_UNDO_H_
+// #include "sth_undo.h"
+// #endif
 
 // #ifndef DUDETM_H_
 // #include "dudetm.h"
@@ -43,20 +43,10 @@ public:
 #ifndef PMDKTX_H_
     AbstractPtmObject *Clone() {
 #ifdef STH_REDO_H_ 
-#ifdef USE_AEP
-	PONode *po_node = (PONode *)vmem_malloc(sizeof(PONode));
-        new (po_node) PONode();
-#else
 	PONode *po_node = new PONode();
-#endif
 #else
 #ifdef STH_UNDO_H_ 
-#ifdef USE_AEP
-        PONode *po_node = (PONode *)vmem_malloc(sizeof(PONode));
-        new (po_node) PONode();
-#else
         PONode *po_node = new PONode();
-#endif
 #else
 	PONode *po_node = new PONode();
 #endif
